@@ -236,11 +236,19 @@ def _head(results: dict | None, found: list[dict], problems: list[str]) -> list[
                for t in twins if t["p_raw"] < 0.05]
     if differs:
         parts.append(draw.notice(words.TWIN_DIFFERS.format(cases="; ".join(differs), tested=len(twins))))
-    zero = [words.TWIN_ZERO_CASE.format(who=who.format(side=t["side"]), case=t["case"], affected=", ".join(t["cases"]),
-                                        rounds=(words.ROUND_MANY if len(t[key]) > 1 else words.ROUND_ONE).format(
-                                            n=", ".join(map(str, t[key]))))
-            for t in analysis.get("nonpositive_twins") or []
-            for who, key in ((words.TWIN_ZERO_SIDE, "side_rounds"), (words.TWIN_ZERO_TWIN, "twin_rounds")) if t[key]]
+    # Each 0 names the reason its cases got, as analysis.notes does: one shared reason is named, differing ones are not.
+    reason_of = {row["case"]: row.get("reason") for row in analysis.get("comparisons") or []}
+    zero = []
+    for t in analysis.get("nonpositive_twins") or []:
+        reasons = {reason_of.get(cid) for cid in t["cases"]}
+        shared = reasons.pop() if len(reasons) == 1 else None
+        reason = words.TWIN_ZERO_REASON.format(reason=words.REASON_TEXT.get(shared, shared)) if shared else ""
+        for who, key in ((words.TWIN_ZERO_SIDE, "side_rounds"), (words.TWIN_ZERO_TWIN, "twin_rounds")):
+            if t[key]:
+                rounds = (words.ROUND_MANY if len(t[key]) > 1 else words.ROUND_ONE).format(
+                    n=", ".join(map(str, t[key])))
+                zero.append(words.TWIN_ZERO_CASE.format(who=who.format(side=t["side"]), case=t["case"],
+                                                        affected=", ".join(t["cases"]), rounds=rounds, reason=reason))
     if zero:
         parts.append(draw.notice(words.TWIN_ZERO.format(cases="; ".join(zero))))
     if run.get("server_restored") is False:

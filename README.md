@@ -545,8 +545,9 @@ With n rounds no p-value can be smaller than 2^(1-n), and Holm multiplies the sm
 cases that got a p-value. A primary case with fewer than 2 rounds in which both sides have a figure above 0 gets no
 p-value (and NO VERDICT) and leaves that count, so the other primary cases are corrected for fewer cases; the report and
 the notebook print how many cases were tested and how many were declared. With the 4 default primary cases, fewer than 8
-rounds give every primary case NO VERDICT (`too_few_rounds`; this minimum counts every declared primary case); at 8
-rounds a FASTER, SLOWER, BETTER or WORSE needs all 8 rounds to lean the same way, and at 16 rounds 14 of the 16 (13 when
+rounds give every primary case NO VERDICT (`too_few_rounds`, or `single_measurement` for a case with 1 paired round,
+unless a reason the analysis checks first applies; this minimum counts every declared primary case); at 8 rounds a
+FASTER, SLOWER, BETTER or WORSE needs all 8 rounds to lean the same way, and at 16 rounds 14 of the 16 (13 when
 only 1 or 2 primary cases got a p-value). A secondary case needs at least 6 rounds. A failed launch takes its round out
 of that case's count, so at 8 rounds one failed or unmeasured launch of A or B leaves the primary cases it touches
 without a verdict. `python -m rhvp_compare validate` prints what a plan allows, and the runner prints it before the
