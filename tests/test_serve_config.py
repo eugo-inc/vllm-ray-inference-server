@@ -722,9 +722,38 @@ def test_main_bad_config_exits_2(tmp_path, monkeypatch):
     assert serve_app.main(["--config", str(tmp_path / "missing.yaml")]) == 2
 
 
-def test_engine_flags_after_the_programs_own_become_engine_kwargs(tmp_path, monkeypatch, capsys):
+# Declared types of a few vLLM engine and OpenAI server arguments, in the shapes dataclasses.fields gives them (types,
+# unions and string annotations), standing in for serve_app.vllm_argument_types() where vLLM is not installed.
+FAKE_VLLM_TYPES = {
+    "attention_backend": "AttentionBackendEnum | None", "max_num_seqs": "int | None", "enforce_eager": bool,
+    "enable_prefix_caching": "bool | None", "seed": int, "tokenizer": "str | None", "revision": "str | None",
+    "disable_log_stats": bool, "enable_auto_tool_choice": bool, "max_model_len": "int | None",
+    "gpu_memory_utilization": float, "hf_overrides": "dict | None", "tensor_parallel_size": int,
+}
+
+
+@pytest.fixture
+def no_vllm(monkeypatch):
+    monkeypatch.setattr(serve_app, "vllm_argument_types", lambda: None)
+
+
+@pytest.fixture
+def fake_vllm(monkeypatch):
+    monkeypatch.setattr(serve_app, "vllm_argument_types", lambda: (FAKE_VLLM_TYPES, True))
+
+
+def _print_config(tmp_path, monkeypatch, argv):
+    monkeypatch.setenv("RAY_TMPDIR", str(tmp_path))
+    for name in serve_app.ENV_OVERRIDES:
+        monkeypatch.delenv(name, raising=False)
+    return serve_app.main(["--config", write(tmp_path, CONTRACT_YAML), "--print-config", *argv])
+
+
+@pytest.mark.parametrize("vllm", ["no_vllm", "fake_vllm"])
+def test_engine_flags_among_the_programs_own_become_engine_kwargs(tmp_path, monkeypatch, capsys, request, vllm):
     """The image comparison adds a side's args after the preset's: for the ray-serve-llm preset they are vLLM
     engine flags, as a vllm-openai side takes them."""
+    request.getfixturevalue(vllm)
     monkeypatch.setenv("RAY_TMPDIR", str(tmp_path))
     for name in serve_app.ENV_OVERRIDES:
         monkeypatch.delenv(name, raising=False)
@@ -748,7 +777,7 @@ def test_engine_flags_after_the_programs_own_become_engine_kwargs(tmp_path, monk
     (["--max-num-seqs", "64", "--gpu-memory-utilization=0.5"], {"max_num_seqs": 64, "gpu_memory_utilization": 0.5}),
     (["--enforce-eager", "--max-num-seqs", "8"], {"enforce_eager": True, "max_num_seqs": 8}),
     (["--max-num-seqs", "8", "--enforce-eager"], {"max_num_seqs": 8, "enforce_eager": True}),
-    (["--enforce-eager", "false"], {"enforce_eager": False}),
+    (["--enforce-eager", "false"], {"enforce_eager": False}),  # by form only; with vLLM's types it is refused
     (["--no-enable-prefix-caching"], {"enable_prefix_caching": False}),
     (["--seed", "-1"], {"seed": -1}),
     (["--hf-overrides", '{"rope_scaling": {"factor": 2.0}}'], {"hf_overrides": {"rope_scaling": {"factor": 2.0}}}),
@@ -756,12 +785,50 @@ def test_engine_flags_after_the_programs_own_become_engine_kwargs(tmp_path, monk
     (["--override-generation-config=temperature=0.5"], {"override_generation_config": "temperature=0.5"}),
     (["--tokenizer-mode", "auto", "--kv-cache-dtype=fp8"], {"tokenizer_mode": "auto", "kv_cache_dtype": "fp8"}),
     (["--quantization", "yes"], {"quantization": "yes"}),  # read as JSON, not YAML: "yes" stays text
-    (["--code-revision", "0123"], {"code_revision": "0123"}),  # not JSON (a leading 0): stays text
+    (["--code-revision", "0123"], {"code_revision": "0123"}),
+    (["--revision", "1.10", "--tokenizer-revision", "1e3"], {"revision": "1.10", "tokenizer_revision": "1e3"}),
+    (["--seed", "NaN", "--x", "Infinity"], {"seed": "NaN", "x": "Infinity"}),  # not JSON numbers: text
     (["--some-flag=-x"], {"some_flag": "-x"}),
     (["--chat-template", ""], {"chat_template": ""}),
 ])
-def test_engine_flags_mapping(argv, expected):
+def test_engine_flags_by_form(argv, expected):
     assert serve_app.engine_flags(argv) == expected
+
+
+@pytest.mark.parametrize("argv, expected", [
+    (["--attention-backend", "FLASHINFER", "--max-num-seqs", "64", "--enforce-eager", "--no-enable-prefix-caching",
+      "--disable-log-stats"],
+     {"attention_backend": "FLASHINFER", "max_num_seqs": 64, "enforce_eager": True, "enable_prefix_caching": False,
+      "disable_log_stats": True}),
+    (["--tokenizer", "123", "--revision", "1.10"], {"tokenizer": "123", "revision": "1.10"}),  # text arguments
+    (["--disable-prefix-caching"], {"enable_prefix_caching": False}),  # vLLM's alias of --no-enable-prefix-caching
+    (["--no-disable-prefix-caching"], {"enable_prefix_caching": True}),
+    (["--enable-auto-tool-choice"], {"enable_auto_tool_choice": True}),  # an OpenAI server argument
+])
+def test_engine_flags_with_vllms_types(argv, expected):
+    assert serve_app.engine_flags(argv, FAKE_VLLM_TYPES) == expected
+
+
+@pytest.mark.parametrize("argv, words", [
+    (["--max-num-seqs", "--enforce-eager"], "'--max-num-seqs' needs a value: max_num_seqs is not a boolean"),
+    (["--seed"], "'--seed' needs a value"),
+    (["--no-max-num-seqs"], "'--no-max-num-seqs' needs a value"),
+    (["--enforce-eager", "false"], "enforce_eager is a boolean and takes no value"),
+    (["--enforce-eager=true"], "enforce_eager is a boolean and takes no value"),
+    (["--atention-backend", "FLASHINFER"], "atention_backend is not a vLLM engine or OpenAI server argument"),
+    (["--print_config"], "print_config is not a vLLM engine or OpenAI server argument"),
+    (["--disable-prefix-caching", "--enable-prefix-caching"], "enable_prefix_caching is given more than once"),
+])
+def test_engine_flags_vllms_types_refuse(argv, words):
+    with pytest.raises(serve_app.ConfigError, match=re.escape(words)):
+        serve_app.engine_flags(argv, FAKE_VLLM_TYPES)
+
+
+def test_engine_flags_with_part_of_vllms_types_leave_unknown_names_to_ray():
+    assert serve_app.engine_flags(["--atention-backend", "X"], FAKE_VLLM_TYPES, complete=False) == {
+        "atention_backend": "X"}
+    with pytest.raises(serve_app.ConfigError, match="needs a value"):
+        serve_app.engine_flags(["--max-num-seqs"], FAKE_VLLM_TYPES, complete=False)
 
 
 @pytest.mark.parametrize("argv, words", [
@@ -779,20 +846,50 @@ def test_engine_flags_mapping(argv, expected):
     (["--enable-prefix-caching", "--no-enable-prefix-caching"], "enable_prefix_caching is given more than once"),
     (["--no-enable-prefix-caching", "true"], "takes no value"),
     (["--no-enable-prefix-caching=false"], "takes no value"),
+    (["--port", "9000"], "this server listens where llm.yaml says"),
+    (["--host=0.0.0.0"], "this server listens where llm.yaml says"),
 ])
 def test_engine_flags_it_cannot_map_are_refused(argv, words):
-    with pytest.raises(serve_app.ConfigError, match=re.escape(words)):
-        serve_app.engine_flags(argv)
+    for types in (None, FAKE_VLLM_TYPES):
+        with pytest.raises(serve_app.ConfigError, match=re.escape(words)):
+            serve_app.engine_flags(argv, types)
 
 
-@pytest.mark.parametrize("argv", [["stray"], ["-x", "1"], ["---odd", "1"], ["--model", "other/model"],
-                                  ["--served-model-name", "x"], ["--max-model-len", "lots"],
-                                  ["--seed", "1", "--seed", "2"], ["--", "--seed", "1"]])
-def test_bad_or_forbidden_engine_flags_exit_2(tmp_path, monkeypatch, capsys, argv):
-    monkeypatch.setenv("RAY_TMPDIR", str(tmp_path))
-    path = write(tmp_path, CONTRACT_YAML)
-    assert serve_app.main(["--config", path, "--print-config", *argv]) == 2
+@pytest.mark.parametrize("vllm, argv, words", [
+    ("no_vllm", ["stray"], "a value with no flag before it"),
+    ("no_vllm", ["-x", "1"], "short flags are not taken"),
+    ("no_vllm", ["-h"], "short flags are not taken"),
+    ("no_vllm", ["--x", "-h"], "short flags are not taken"),
+    ("no_vllm", ["---odd", "1"], "lower-case words"),
+    ("no_vllm", ["--model", "other/model"], "engine_kwargs.model is not allowed"),
+    ("no_vllm", ["--served-model-name", "x"], "engine_kwargs.served_model_name is not allowed"),
+    ("no_vllm", ["--max-model-len", "lots"], "max_model_len must be a positive integer"),
+    ("no_vllm", ["--seed", "1", "--seed", "2"], "seed is given more than once"),
+    ("no_vllm", ["--", "--seed", "1"], "lower-case words"),
+    ("fake_vllm", ["--max-num-seqs", "--enforce-eager"], "needs a value"),
+    ("fake_vllm", ["--atention-backend", "FLASHINFER"], "is not a vLLM engine or OpenAI server argument"),
+])
+def test_bad_or_forbidden_engine_flags_exit_2(tmp_path, monkeypatch, capsys, caplog, request, vllm, argv, words):
+    request.getfixturevalue(vllm)
+    with caplog.at_level(logging.ERROR, logger="rhvp.serve"):
+        assert _print_config(tmp_path, monkeypatch, argv) == 2
     assert capsys.readouterr().out == ""
+    assert any(words in record.getMessage() for record in caplog.records), caplog.text
+
+
+def test_without_vllm_the_flags_are_checked_by_form_only_and_it_says_so(tmp_path, monkeypatch, capsys, caplog,
+                                                                         no_vllm):
+    with caplog.at_level(logging.WARNING, logger="rhvp.serve"):
+        assert _print_config(tmp_path, monkeypatch, ["--max-num-seqs", "8"]) == 0
+    assert "checked by their form only" in caplog.text
+    assert json.loads(capsys.readouterr().out)["llm_config"]["engine_kwargs"]["max_num_seqs"] == 8
+
+
+def test_no_engine_flags_no_vllm_import(tmp_path, monkeypatch, capsys):
+    def boom():
+        raise AssertionError("vLLM imported with no engine flags")
+    monkeypatch.setattr(serve_app, "vllm_argument_types", boom)
+    assert _print_config(tmp_path, monkeypatch, []) == 0
 
 
 def test_engine_flags_win_over_the_file_and_the_environment(tmp_path):
@@ -804,12 +901,26 @@ def test_engine_flags_win_over_the_file_and_the_environment(tmp_path):
         "gpu_memory_utilization"] == 0.7
 
 
-def test_an_abbreviated_own_option_is_an_engine_flag(tmp_path, monkeypatch, capsys):
+def test_an_abbreviated_own_option_is_an_engine_flag(tmp_path):
     """allow_abbrev=False: --print is not read as --print-config."""
-    monkeypatch.setenv("RAY_TMPDIR", str(tmp_path))
     path = write(tmp_path, CONTRACT_YAML)
     args = serve_app._parse_args(["--config", path, "--print", "1"])
     assert args.print_config is False and args.engine_flags == ["--print", "1"]
+
+
+def test_help_is_only_the_long_option(capsys):
+    with pytest.raises(SystemExit) as stop:
+        serve_app._parse_args(["--help"])
+    assert stop.value.code == 0 and "is a vLLM engine flag" in " ".join(capsys.readouterr().out.split())
+    assert serve_app._parse_args(["-h"]).engine_flags == ["-h"]
+
+
+def test_vllm_type_names():
+    assert all(serve_app._is_bool_type(t) for t in (bool, "bool", "bool | None", "Optional[bool]",
+                                                    "typing.Optional[bool]", bool | None))
+    assert not any(serve_app._is_bool_type(t) for t in (int, "int | None", "bool | str", "Literal['auto']"))
+    assert all(serve_app._is_text_type(t) for t in (str, "str | None", str | None))
+    assert not serve_app._is_text_type("str | int")
 
 
 def test_rhvp_status_exit_codes_and_output(monkeypatch, capsys):
