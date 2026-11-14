@@ -128,9 +128,15 @@ edit them by hand; `patternizer upgrade` rewrites them. You may add targets to `
 
 1. `entrypoint.sh` replaces the base image's NVIDIA entrypoint. It unsets `HF_TOKEN` unless the value starts
    with `hf_`, then starts `serve_app.py`.
-2. `serve_app.py` reads `/config/llm.yaml` (the path in `RHVP_CONFIG`) and then the environment overrides
+2. `serve_app.py` reads `/config/llm.yaml` (the path in `RHVP_CONFIG`), then the environment overrides
    `RHVP_MODEL_ID`, `RHVP_MODEL_SOURCE`, `RHVP_MODEL_REVISION`, `RHVP_GPU_MEMORY_UTILIZATION` and
-   `RHVP_MAX_MODEL_LEN`.
+   `RHVP_MAX_MODEL_LEN`, and then any vLLM engine flags on its command line after its own options
+   (`serve_app.engine_flags`; the chart passes none, the comparison passes a `ray-serve-llm` side's `args`). Each
+   becomes a key of `engine_kwargs`: `--attention-backend FLASHINFER` is `attention_backend: FLASHINFER`,
+   `--max-num-seqs=64` is `max_num_seqs: 64` (a value is read as JSON when it is JSON, else kept as text),
+   `--enforce-eager` is `true` and `--no-enable-prefix-caching` is `enable_prefix_caching: false`. A short flag, a
+   dotted name, a flag given twice, a `--no-` flag with a value and a bare value are refused with exit 2; no flag
+   is dropped.
 3. It starts Ray with a 2 GiB object store and its Prometheus metrics on port 8080 (`metrics_port`), checks that
    Ray sees enough GPUs for `max_replicas` replicas (exit 2 when it does not and `max_replicas` is above 1), starts
    Serve on `0.0.0.0:8000`, and runs the Ray Serve LLM app `llm`. `serve.run` returns once the app is RUNNING,
@@ -215,7 +221,13 @@ and uses a serving certificate; the Route uses `reencrypt` termination.
   older one is Pending or Running. It then scales Deployment `ray-serve-llm` to 0, and for each launch creates a
   side pod in `vllm-inference` (every one after the first pinned to the first one's node), times its start, runs
   GuideLLM as its own child process, reads GPU power from the Thanos Querier, deletes the pod and saves
-  `results.json`. A round launches A, A~same, B and B~same once each (`plan.launch_order`, rotate-reverse); a twin
+  `results.json`. A side's `args` follow its preset's own: `vllm serve` flags for `vllm-openai`, the same vLLM
+  engine flags for `ray-serve-llm` (`serve_app.engine_flags`, "How the server starts"). GuideLLM starts only after
+  the side has listed the model on `GET /v1/models` and answered a streamed request (`probe`), and its backend
+  carries `validate_backend=false` (`guidellm._backend`, both modes): GuideLLM v0.8.1's own check is
+  `GET <target>/health`, and Ray Serve LLM's OpenAI app has no `/health` route, so with the check every load of the
+  pattern's own server failed. In mode `scaleout` GuideLLM goes through the router, whose `/health` only says it
+  has a replica. A round launches A, A~same, B and B~same once each (`plan.launch_order`, rotate-reverse); a twin
   (`A~same`) launches its side's image and spec under another lineup key, so a backend only names it differently
   (`plan.token`: `A-same` in pod names and labels). A side whose server exits at vLLM's start-up memory check
   (`Error in memory profiling` in its log) is started once more in the same launch (`runner.START_RETRIES`, the

@@ -421,6 +421,12 @@ oc annotate scaledobject/ray-serve-llm -n vllm-inference autoscaling.keda.sh/pau
    - set the two `sides`: a `name`, an `image` (pin it by digest), and a `preset`: `vllm-openai` for an upstream
      vLLM OpenAI server image, `ray-serve-llm` for this pattern's own server image, or `custom` with your own
      `command` and `args`;
+   - optionally give a side `args`, added after the preset's own. For `vllm-openai` they are `vllm serve` flags.
+     For `ray-serve-llm` they are vLLM engine flags in the same form, and each becomes a setting of the vLLM engine:
+     `--attention-backend FLASHINFER` sets `attention_backend`, `--max-num-seqs=64` sets `max_num_seqs`,
+     `--enforce-eager` sets `enforce_eager` to true and `--no-enable-prefix-caching` sets `enable_prefix_caching` to
+     false. So both presets take the same `args`. The server refuses to start (exit 2) on a flag it cannot turn into
+     a setting: a short flag such as `-tp`, a dotted name, a flag given twice, or a value with no flag before it;
    - check `runName`, `rounds` (`count`, `warmup`, `twins`), `load` and `analysis` (`alpha`, `primary`). The
      comments there explain each setting.
 3. Commit and push. Argo CD creates the Job `compare-<runName>-<hash>` in `vllm-notebook`. We expect the `notebook`
@@ -473,7 +479,9 @@ launches use the same GPU. The runner then measures:
   loading the weights.
 - **Load.** GuideLLM (pinned, `v0.8.1`) runs one level after another, at 1, 8 and 32 concurrent streams by default,
   with fixed prompt and output lengths and a fixed seed. Per level it records time to first token, inter-token
-  latency and output tokens per second.
+  latency and output tokens per second. It starts only after the side has given its first answer (above), and runs
+  with its own check of the server turned off (`validate_backend=false`): that check asks for `GET /health`, and
+  Ray Serve LLM's OpenAI app, which this pattern's server runs, has no `/health` route.
 - **Energy.** Output tokens per joule at each level, from the GPU's own board power read from DCGM through the
   cluster's monitoring. This is GPU-only power: the rest of the machine is not in it, and the results label it so
   (case ids end in `tokens_per_joule[gpu]`). A level with fewer power samples than `energy.minSamples` (10) gets no
