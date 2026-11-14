@@ -71,8 +71,9 @@ def eta_seconds(results: Mapping) -> int | None:
 
 
 def levels_unusable(results: Mapping) -> list[dict]:
-    """The load levels of finished measured launches left out of the comparison: requests failed there, or none
-    finished."""
+    """The load levels of finished measured launches where requests failed or none finished. A concurrency level is
+    then left out of the comparison; a scale-out surge (concurrency None) only loses its latency medians, and its
+    failed requests count as requests that missed the goals (guidellm.surge_values)."""
     out = []
     for r in results.get("launches") or []:
         if r.get("status") != "ok" or r.get("kind") == "warmup":
@@ -89,6 +90,84 @@ def levels_unusable(results: Mapping) -> list[dict]:
 def launches(indexes: list[int]) -> str:
     """"launch 2" or "launches 2, 5"."""
     return f"launch{'es' if len(indexes) > 1 else ''} {', '.join(map(str, indexes))}"
+
+
+#: summary.surge_rate_fit: "all_failed" needs at least this share of a surge's judged requests (those that finished
+#: or failed) to have failed, in every scored surge of both sides; "all_missed" needs at most this share within the
+#: latency goals in every one. words.SCALE_RATE_ALL_FAILED and SCALE_RATE_ALL_MISSED state both.
+SURGE_FAILED_SHARE = 0.5
+SURGE_MET_SHARE_LOW = 0.05
+
+
+def first_try_kept(launch: Mapping) -> bool:
+    """Whether `launch` kept the files of a try it set aside after a GuideLLM time-out (its *.try-N.* files, artifact
+    keys *_try_N). A launch stopped while its timed-out GuideLLM, or the power sampler after it, was being stopped
+    never set its try aside, and has none."""
+    return any("_try_" in key for key in launch.get("artifacts") or {})
+
+
+def surge_rate_fit(results: Mapping) -> str | None:
+    """Mode scaleout, when the surge rate did not separate the sides, from what every scored surge of both sides
+    (their twins' too) measured: "all_met" when each met the latency goals for every request it judged and none
+    failed; "all_failed" when in each at least SURGE_FAILED_SHARE of the judged requests (finished or failed) failed;
+    "all_missed" when in each at most SURGE_MET_SHARE_LOW of them met the goals (a surge in which nothing finished or
+    failed counts as 0). Else None (also when a side has no finished scored surge). README, "Picking the surge
+    rate", says what to change."""
+    if (results.get("plan") or {}).get("mode") != "scaleout":
+        return None
+    surges: dict[str, list] = {"A": [], "B": []}
+    for r in results.get("launches") or []:
+        side = r.get("of", r.get("side"))
+        if r.get("kind") == "scored" and r.get("status") == "ok" and side in surges:
+            surges[side] += [lv for lv in r.get("levels") or [] if lv.get("concurrency") is None]
+    if not surges["A"] or not surges["B"]:
+        return None
+    every = surges["A"] + surges["B"]
+
+    def counts(level: Mapping) -> tuple[int, int]:
+        requests = level.get("requests") or {}
+        failed, finished = requests.get("errored") or 0, requests.get("successful") or 0
+        return failed, failed + finished
+
+    if all(counts(lv)[0] == 0 and lv.get("slo_attainment") == 1 for lv in every):
+        return "all_met"
+    if all(judged and failed >= SURGE_FAILED_SHARE * judged for failed, judged in map(counts, every)):
+        return "all_failed"
+
+    def met(level: Mapping) -> float | None:
+        value = level.get("slo_attainment")
+        return 0.0 if value is None and not counts(level)[1] else value
+
+    if all(isinstance(share := met(lv), (int, float)) and share <= SURGE_MET_SHARE_LOW for lv in every):
+        return "all_missed"
+    return None
+
+
+def surge_capped(results: Mapping) -> list[dict]:
+    """Mode scaleout, when the rate let one side meet the goals for every request: per side whose noise floor on
+    surge/slo_attainment is exactly 0 (so that case gets NO VERDICT, zero_floor) and whose own or twin's scored
+    surges reached a share of 1, {"side", "met", "surges"}: how many of those surges met the goals for every request,
+    of how many. A share cannot rise above 1, so in such surges the side and its twin read the same, and their
+    median ratio sits on 1. Empty when surge_rate_fit already names the rate (both sides met every goal), and in
+    mode levels."""
+    if (results.get("plan") or {}).get("mode") != "scaleout" or surge_rate_fit(results) == "all_met":
+        return []
+    row = next((c for c in (results.get("analysis") or {}).get("comparisons") or []
+                if c.get("case") == "surge/slo_attainment"), None)
+    if row is None or row.get("reason") != "zero_floor":
+        return []
+    floors = row.get("floor") or {}
+    out = []
+    for side, key in (("A", "baseline"), ("B", "subject")):
+        if (floors.get(key) or {}).get("value") != 0:
+            continue
+        shares = [lv.get("slo_attainment") for r in results.get("launches") or []
+                  if r.get("kind") == "scored" and r.get("status") == "ok" and r.get("of", r.get("side")) == side
+                  for lv in r.get("levels") or [] if lv.get("concurrency") is None]
+        met = sum(1 for share in shares if share == 1)
+        if met:
+            out.append({"side": side, "met": met, "surges": len(shares)})
+    return out
 
 
 def energy_methods_mixed(results: Mapping) -> list[dict]:
@@ -165,6 +244,24 @@ def termination(results: Mapping) -> str:
         data.pop(drop)
     return compact({"run_id": str(run.get("id"))[:200], "status": run.get("status"),
                     "error_code": run.get("error_code"), "server_restored": run.get("server_restored")})
+
+
+def replica_gpus(results: Mapping) -> dict[int, list[dict]]:
+    """Mode scaleout: per replica number, the GPUs its servers got in the scored launches that finished, from the
+    server records, in first-seen order: each the request (`gpus`) with the UUIDs nvidia-smi read through it (`uuids`,
+    empty when not read; for a MIG device, its parent GPU's UUID); empty when no record has a request."""
+    out: dict[int, list[dict]] = {}
+    for r in results.get("launches") or []:
+        if r.get("kind") != "scored" or r.get("status") != "ok":
+            continue
+        for item in r.get("servers") or []:
+            if not isinstance(item.get("gpus"), str):
+                continue
+            uuids = [u for u in item.get("gpu_uuids") or [] if isinstance(u, str)]
+            entry = {"gpus": item["gpus"], "uuids": uuids}
+            if entry not in out.setdefault(item["replica"], []):
+                out[item["replica"]].append(entry)
+    return {n: given for n, given in sorted(out.items()) if given}
 
 
 def not_started(code: str, message: str, run_id: str | None = None) -> dict:
