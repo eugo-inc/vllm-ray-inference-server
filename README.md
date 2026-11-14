@@ -428,15 +428,19 @@ oc annotate scaledobject/ray-serve-llm -n vllm-inference autoscaling.keda.sh/pau
      `enable_prefix_caching` to false. The syntax is the server's own, not `vllm serve`'s: a list is one JSON list
      (`--cudagraph-capture-sizes=[1,2,4]`, where `vllm serve` takes `1 2 4`), a mapping is JSON, and `--no-` works
      for every boolean. Before Ray starts, the server checks each name against the vLLM in its image, and checks the
-     values of booleans, whole numbers, numbers and lists; choices, mappings, config objects and the items of a list
-     go to vLLM as given, and vLLM checks them when the engine starts. The server refuses to start (exit 2) on a
-     flag it cannot turn into a setting: a name that is not a vLLM engine argument (vLLM's OpenAI server settings,
-     such as `--port`, `--api-key` or `--enable-auto-tool-choice`, included), a value of the wrong kind for a
-     boolean, whole number, number or list (`8k` is not a whole number here), the values `None` and empty (which
-     `vllm serve` reads as no value), a short flag such as `-tp`, a dotted name, a flag given twice, a value with no
-     flag before it, `--hf-token` (the server reads the token from `HF_TOKEN`), and `--model` and
-     `--served-model-name` (the model comes from `global.model`). `--config` and `--print-config` are the server's
-     own options, not vLLM's, and `--help` lists these rules;
+     values of booleans, whole numbers, numbers and lists. Choices, enums, mappings, config objects and the items of
+     a list go to vLLM as given: the server does not check them, and vLLM's own config checks are expected to refuse
+     most bad ones when the engine starts. The server refuses to start (exit 2) on a flag it cannot turn into a
+     setting: a name that is not a vLLM engine argument (vLLM's OpenAI server settings, such as `--port`,
+     `--api-key` or `--enable-auto-tool-choice`, included), a name that is not lower-case words, a flag that needs a
+     value and has none, a value of the wrong kind for a boolean, whole number, number or list (`8k` is not a whole
+     number here), the values `None`, empty and `null` (which read as no value), a short flag such as `-tp`, a
+     dotted name, a flag given twice, a `--no-` flag with a value, a value with no flag before it, `--hf-token` (the
+     server reads the token from `HF_TOKEN`), `--tokens-only` (Ray Serve LLM gives it to vLLM's OpenAI server
+     settings only, not to the engine), `--model` and `--served-model-name` (the model comes from `global.model`),
+     and two settings that Ray Serve LLM itself refuses once Ray has started, `--disable-log-stats` and a
+     `--distributed-executor-backend` other than `ray`. `--config` and `--print-config` are the server's own
+     options, not vLLM's, and `--help` lists these rules;
    - check `runName`, `rounds` (`count`, `warmup`, `twins`), `load` and `analysis` (`alpha`, `primary`). The
      comments there explain each setting.
 3. Commit and push. Argo CD creates the Job `compare-<runName>-<hash>` in `vllm-notebook`. We expect the `notebook`
@@ -702,11 +706,15 @@ it. Output tokens per second, over the whole level, is not timed per token.
   run as partial / `STOPPED` and started the stand-in live server again.
 - DCGM's answers are parsed under both the old and the new DCGM exporter metric names, in tests only.
 - No `ray-serve-llm` side has finished a scored launch, with or without `args`. The way the server turns `args`
-  into engine settings was run side by side against `vllm serve`'s own parser for vLLM 0.33.0, on 134 sets of
-  flags: each one the server took gave the setting `vllm serve` gives, apart from the syntax in "Run a comparison"
-  and `--reasoning-parser none`, which `vllm serve` turns into no parser and the server passes on as the text
-  `none`. For vLLM 0.29.0, which this pattern's image pins, only the engine arguments' declared types at that tag
-  were read; nothing was run with it.
+  into engine settings was run side by side against `vllm serve`'s own parser for vLLM 0.33.0, on 139 sets of
+  flags. Where both took a set, they gave the same setting, apart from the syntax in "Run a comparison",
+  `--reasoning-parser none` (which `vllm serve` turns into no parser and the server passes on as the text `none`)
+  and `--optimization-level 3` (the number 3 here, the text `3` from `vllm serve`; both are the same level once
+  vLLM reads them). The server took four sets that `vllm serve` refuses, all values it does not check:
+  `--compilation-config 3`, an unknown key in `--quantization-config`, a `--kv-transfer-config` that vLLM finds
+  incomplete, and `--cudagraph-capture-sizes=["a"]`. Building vLLM 0.33.0's engine config on CPU refused the first
+  three and accepted the last; no engine was started. For vLLM 0.29.0, which this pattern's image pins, only the
+  engine arguments' declared types at that tag were read; nothing was run with it.
 - The length of a run, and so of the server's outage, is an estimate (about 4 to 6 hours for 34 server starts).
 
 ## Scale out

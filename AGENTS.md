@@ -139,15 +139,20 @@ edit them by hand; `patternizer upgrade` rewrites them. You may add targets to `
    (`serve_app.ENGINE_FLAGS_HELP`): a list is one JSON list, `--no-` works for every boolean, and a value that is
    not text is read as JSON when it is JSON. When flags are given it imports that class and checks each name
    against its fields and each value against the field's declared type (`serve_app.value_kind`): a boolean takes no
-   value; a whole number, a number and a list must be one; text stays text; choices, enums, mappings and config
-   objects go to the engine as given, and vLLM checks them when the engine starts. Refused, each with exit 2 and a
-   message that names the flag: a name that is not a field (vLLM's OpenAI server settings included), a value of the
-   wrong kind, `None` or an empty value (`vllm serve` reads both as no value), a field that takes a boolean or a
-   value, `--hf-token` (the token comes from `HF_TOKEN`), a short flag, a dotted name, a flag given twice, a `--no-`
-   flag with a value and a value with no flag before it; `load_config` then refuses `model` and
-   `served_model_name`, as in `llm.yaml`. No flag is dropped. Where vLLM cannot be imported (the unit tests) only
-   the form is checked, with a warning. The rules were run side by side against `vllm serve`'s own parser for vLLM
-   0.33.0; for vLLM 0.29.0, which this image pins, only the fields' declared types at its tag were read.
+   value; a whole number, a number and a list must be one; text stays text. Choices, enums, mappings, config
+   objects and the items of a list go to the engine as given; they are not checked here, and vLLM's own config
+   checks are expected to refuse most bad ones when the engine starts. Refused, each with exit 2 and a message that
+   names the flag but not its value: a name that is not a field (vLLM's OpenAI server settings included) or not
+   lower-case words, a flag that needs a value and has none, a value of the wrong kind, `None`, an empty value or
+   `null` (all read as no value), a field that takes a boolean or a value, `--hf-token` (the token comes from
+   `HF_TOKEN`), `--tokens-only` (`serve_app.RAY_FRONTEND_ONLY_KWARGS`: Ray Serve LLM gives that field to vLLM's
+   OpenAI server settings only), `--model` and `--served-model-name`, a short flag, a dotted name, a flag given
+   twice, a `--no-` flag with a value and a value with no flag before it. `load_config` then refuses, from flags
+   and `llm.yaml` alike, `model` and `served_model_name`, a true `disable_log_stats` and a
+   `distributed_executor_backend` other than `ray`, which Ray Serve LLM 2.60.0 would refuse only once Ray has
+   started. No flag is dropped. Where vLLM cannot be imported (the unit tests) only the form is checked, with a
+   warning. The rules were run side by side against `vllm serve`'s own parser for vLLM 0.33.0; for vLLM 0.29.0,
+   which this image pins, only the fields' declared types at its tag were read.
 3. It starts Ray with a 2 GiB object store and its Prometheus metrics on port 8080 (`metrics_port`), checks that
    Ray sees enough GPUs for `max_replicas` replicas (exit 2 when it does not and `max_replicas` is above 1), starts
    Serve on `0.0.0.0:8000`, and runs the Ray Serve LLM app `llm`. `serve.run` returns once the app is RUNNING,
@@ -237,22 +242,21 @@ and uses a serving certificate; the Route uses `reencrypt` termination.
   GuideLLM starts only after the side has listed the model on `GET /v1/models` and answered a streamed request
   (`probe`), and its backend carries `validate_backend=false` (`guidellm._backend`, both modes): GuideLLM v0.8.1's
   own check is `GET <target>/health` by default, and Ray Serve LLM's OpenAI app has no `/health` route, so with the
-  check every load of the pattern's own server failed. In mode `scaleout` GuideLLM goes through the router, whose
+  check every load of the pattern's own server fails. In mode `scaleout` GuideLLM goes through the router, whose
   `/health` only says it has a replica. A round launches A, A~same, B and B~same once each (`plan.launch_order`,
-  rotate-reverse); a twin
-  (`A~same`) launches its side's image and spec under another lineup key, so a backend only names it differently
-  (`plan.token`: `A-same` in pod names and labels). A side whose server exits at vLLM's start-up memory check
-  (`Error in memory profiling` in its log) is started once more in the same launch (`runner.START_RETRIES`, the
-  launch's `start_retries`, and the server record's own `start_retries`); in mode `scaleout` the second replica gets
-  the same one retry, timed from its first ask. A GuideLLM time-out runs the launch once more with the same requests
-  (`runner.LOAD_RETRIES`): in mode `levels` from a new start of the side, timed from that start; in mode `scaleout`
-  from a new first replica, after GuideLLM, the router and the replicas that had started are taken down. The launch's `load_timeouts` is counted when the
-  time-out happens and `load_retries` only once the second load begins; the first try's files are kept as
-  `*.try-1.*`, its notes are marked `try 1:`, its server records are marked `discarded`, and its figures are cleared
-  before the teardown. Time-outs count
-  against their side in `analysis.load_timeouts` (totals) and per comparison. When the run ends it scales the server
-  back to `compare.serverReplicas` (1), tries again for about a minute, reads the scale back, and records
-  `run.server_restored`; a server that did not come back is exit 4.
+  rotate-reverse); a twin (`A~same`) launches its side's image and spec under another lineup key, so a backend only
+  names it differently (`plan.token`: `A-same` in pod names and labels). A side whose server exits at vLLM's
+  start-up memory check (`Error in memory profiling` in its log) is started once more in the same launch
+  (`runner.START_RETRIES`, the launch's `start_retries`, and the server record's own `start_retries`); in mode
+  `scaleout` the second replica gets the same one retry, timed from its first ask. A GuideLLM time-out runs the
+  launch once more with the same requests (`runner.LOAD_RETRIES`): in mode `levels` from a new start of the side,
+  timed from that start; in mode `scaleout` from a new first replica, after GuideLLM, the router and the replicas
+  that had started are taken down. The launch's `load_timeouts` is counted when the time-out happens and
+  `load_retries` only once the second load begins; the first try's files are kept as `*.try-1.*`, its notes are
+  marked `try 1:`, its server records are marked `discarded`, and its figures are cleared before the teardown.
+  Time-outs count against their side in `analysis.load_timeouts` (totals) and per comparison. When the run ends it
+  scales the server back to `compare.serverReplicas` (1), tries again for about a minute, reads the scale back, and
+  records `run.server_restored`; a server that did not come back is exit 4.
 - The ray-serve-llm app ignores the Deployment's `/spec/replicas` on every install, also with the comparison off: a
   sync never changes the server's replica count, so a server at 0 stays at 0 until someone scales it.
 - SIGTERM (a deleted Job or `activeDeadlineSeconds`) cuts the current launch short and asks the server back at once,

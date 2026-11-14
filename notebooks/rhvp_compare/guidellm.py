@@ -72,8 +72,9 @@ def _backend(plan: Mapping, target: str) -> str:
     /health route (it answers 404), so with the check every load of the pattern's own server would fail. Nothing is
     lost: before any load the runner has seen GET /v1/models list the model and a streamed request to the load's
     endpoint answer with text (`probe.wait_ready`, `probe.first_answer`), and in mode scaleout `router.spawn` has
-    waited until the router answers, whose /health checks only that it has a replica. (The check could instead be
-    pointed at /v1/models, `api_routes./health=v1/models`; that would repeat a request the runner has made.)"""
+    waited until the router answers; the router's own /health checks only that it has a replica. (The check could
+    instead be pointed at /v1/models, `api_routes./health=v1/models`; that would repeat a request the runner has
+    made.)"""
     load, model = plan["load"], plan["model"]
     return (f"kind=openai_http,target={target},model={model['id']},request_format={load['request_format']},"
             "validate_backend=false")
