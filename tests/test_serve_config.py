@@ -731,7 +731,8 @@ FAKE_VLLM_TYPES = {
     "disable_log_stats": bool, "max_model_len": "int | None", "gpu_memory_utilization": float,
     "hf_overrides": "dict[str, Any] | None", "tensor_parallel_size": int, "compilation_config": "CompilationConfig",
     "cudagraph_capture_sizes": "list[int] | None", "kv_cache_dtype": "Literal['auto', 'fp8']",
-    "hf_token": "bool | str | None",
+    "hf_token": "bool | str | None", "model": "str", "served_model_name": "str | list[str] | None",
+    "tokens_only": bool, "distributed_executor_backend": "str | DistributedExecutorBackend | type[Executor] | None",
 }
 
 
@@ -828,7 +829,15 @@ def test_engine_flags_with_vllms_types(argv, expected):
     (["--tokenizer", "None"], "the value 'None' is not taken"),  # vllm serve reads it as no value: not "None"
     (["--tokenizer", ""], "the value '' is not taken"),
     (["--revision="], "the value '' is not taken"),
-    (["--max-num-seqs", "null"], "max_num_seqs takes a whole number"),  # vLLM's parser refuses it too
+    (["--max-num-seqs", "null"], "the value 'null' is not taken"),
+    (["--attention-backend", "null"], "the value 'null' is not taken"),  # JSON null would be vLLM's default
+    (["--hf-overrides=null"], "the value 'null' is not taken"),
+    (["--served-model-name", "x"], "engine_kwargs.served_model_name is not allowed"),
+    (["--served-model-name=[\"x\"]"], "engine_kwargs.served_model_name is not allowed"),
+    (["--model", "other/model"], "engine_kwargs.model is not allowed"),
+    (["--tokens-only"], "tokens_only is not taken here; Ray Serve LLM gives it to vLLM's OpenAI server settings"),
+    (["--disable-prefix-caching"], "give --no-enable-prefix-caching"),
+    (["--enable-log-stats"], "give --no-disable-log-stats"),
     (["--seed", "1.5"], "seed takes a whole number"),
     (["--seed", "NaN"], "seed takes a whole number"),
     (["--seed", "true"], "seed takes a whole number"),
@@ -913,6 +922,38 @@ def test_bad_or_forbidden_engine_flags_exit_2(tmp_path, monkeypatch, capsys, cap
         assert _print_config(tmp_path, monkeypatch, argv) == 2
     assert capsys.readouterr().out == ""
     assert any(words in record.getMessage() for record in caplog.records), caplog.text
+
+
+@pytest.mark.parametrize("argv", [
+    ["--hf-token=hf_secret"], ["--hf-token", "hf_secret"], ["--no-hf-token=hf_secret"], ["--api-key=secret"],
+    ["--api-key", "secret"], ["--Api-Key=secret"],
+])
+def test_refusals_do_not_repeat_a_secret_value(argv):
+    for types in (None, FAKE_VLLM_TYPES):
+        if types is None and argv[0].startswith("--api-key"):
+            continue  # by form only, --api-key is taken (vLLM is not there to say it is not an engine argument)
+        with pytest.raises(serve_app.ConfigError) as refused:
+            serve_app.engine_flags(argv, types)
+        assert "secret" not in str(refused.value).replace("secrets", "")
+
+
+def test_settings_ray_serve_llm_refuses_are_exit_2_before_ray_starts(tmp_path, monkeypatch, capsys, caplog, fake_vllm):
+    """Ray Serve LLM 2.60.0 refuses disable_log_stats while its engine metrics are on (its default) and any
+    distributed_executor_backend but "ray"; both are refused here, before Ray starts, from flags and llm.yaml."""
+    for argv, words in ((["--disable-log-stats"], "engine_kwargs.disable_log_stats is not allowed"),
+                        (["--distributed-executor-backend", "mp"], "distributed_executor_backend 'mp' is not allowed")):
+        caplog.clear()
+        with caplog.at_level(logging.ERROR, logger="rhvp.serve"):
+            assert _print_config(tmp_path, monkeypatch, argv) == 2
+        assert capsys.readouterr().out == ""
+        assert any(words in record.getMessage() for record in caplog.records), caplog.text
+    assert _print_config(tmp_path, monkeypatch, ["--distributed-executor-backend", "ray"]) == 0
+    engine = json.loads(capsys.readouterr().out)["llm_config"]["engine_kwargs"]
+    assert engine["distributed_executor_backend"] == "ray"
+    in_yaml = CONTRACT_YAML.replace("tensor_parallel_size: 1}", "tensor_parallel_size: 1, disable_log_stats: true}")
+    assert in_yaml != CONTRACT_YAML
+    with pytest.raises(serve_app.ConfigError, match="disable_log_stats is not allowed"):
+        load_config(write(tmp_path, in_yaml), {})
 
 
 def test_without_vllm_the_flags_are_checked_by_form_only_and_it_says_so(tmp_path, monkeypatch, capsys, caplog,

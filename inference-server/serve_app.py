@@ -156,21 +156,28 @@ _FLAG_NAME = re.compile(r"[a-z][a-z0-9]*(?:[-_][a-z0-9]+)*")
 # Values of these keys stay text even where they look like JSON: a revision 1.10 is not the number 1.1. (Used where
 # vLLM cannot be imported; with vLLM, every argument declared as text keeps its value as text.)
 TEXT_ENGINE_KWARGS = ("revision", "tokenizer_revision", "code_revision")
+# Fields of vLLM's AsyncEngineArgs that are also OpenAI server settings (FrontendArgs) in vLLM 0.29.0 and 0.33.0.
+# Ray Serve LLM 2.60.0 gives a key that FrontendArgs has to the server settings only: the engine would not see it.
+RAY_FRONTEND_ONLY_KWARGS = ("tokens_only",)
 ENGINE_FLAGS_HELP = (
     "Every argument other than --config, --print-config and --help is a vLLM engine argument (a field of vLLM's "
-    "AsyncEngineArgs, by its vllm serve flag name) and becomes a key of engine_kwargs, after llm.yaml and the RHVP_* "
-    "variables. The syntax is this server's own, not vllm serve's parser: --name value or --name=value; a boolean "
-    "as --name (true) or --no-name (false), with no value, for every boolean; a whole number or a number as JSON (no "
-    "8k); a list or set as one JSON list (--name=[1,2], where vllm serve takes --name 1 2); text as given; anything "
-    "else read as JSON when it is JSON (a mapping as --name={...}) and kept as text otherwise. A value that starts "
-    "with '-' and is not a number needs --name=value. Before Ray starts, each name is checked against the vLLM in "
-    "this image, and so is the value of a boolean, a whole number, a number or a list; choices, enums, mappings, "
-    "config objects and the items of a list go to the engine as given, and vLLM checks them when the engine starts. "
-    "Refused (exit 2): a name that is not a vLLM engine argument (vLLM's OpenAI server settings, such as --port or "
-    "--api-key, included), a value of the wrong kind for a boolean, whole number, number or list, the values None "
-    "and '' (vllm serve reads them as no value), short flags (-x), dotted names (--a.b), a flag given twice, a "
-    "--no-name with a value, --hf-token (use the HF_TOKEN variable), a value with no flag before it, and --model and "
-    "--served-model-name (llm.yaml's model_source and model_id)."
+    "AsyncEngineArgs, by its vllm serve flag name) and becomes a key of engine_kwargs, after llm.yaml and the "
+    "RHVP_* variables. The syntax is this server's own, not vllm serve's parser: --name value or --name=value, the "
+    "name in lower-case words; a boolean as --name (true) or --no-name (false), with no value, for every boolean; "
+    "a whole number or a number as JSON (no 8k); a list or set as one JSON list (--name=[1,2], where vllm serve "
+    "takes --name 1 2); text as given; anything else read as JSON when it is JSON (a mapping as --name={...}) and "
+    "kept as text otherwise. A value that starts with '-' and is not a number needs --name=value. Before Ray "
+    "starts, each name is checked against the vLLM in this image, and so is the value of a boolean, a whole "
+    "number, a number or a list. Choices, enums, mappings, config objects and the items of a list go to the engine "
+    "as given: they are not checked here, and vLLM's own config checks are expected to refuse most bad ones when "
+    "the engine starts. Refused (exit 2): a name that is not a vLLM engine argument (vLLM's OpenAI server "
+    "settings, such as --port or --api-key, included); a flag that needs a value and has none; a value of the "
+    "wrong kind for a boolean, whole number, number or list; the values None, '' and null (they read as no "
+    "value); short flags (-x); dotted names (--a.b); a flag given twice; a --no-name with a value; a value with no "
+    "flag before it; --hf-token (use the HF_TOKEN variable); --tokens-only (Ray Serve LLM gives it to vLLM's "
+    "OpenAI server settings only); --model and --served-model-name (llm.yaml's model_source and model_id); and two "
+    "settings Ray Serve LLM refuses once Ray has started: --disable-log-stats and a --distributed-executor-backend "
+    "other than ray."
 )
 
 
@@ -240,7 +247,7 @@ def value_kind(declared: Any) -> str:
     """What value an engine argument declared as ``declared`` takes here: "bool" (no value), "text", "int",
     "number", "list" (a JSON list: a list or set type, or a union with one, as "str|list[str]", which vllm serve
     also gives as a list), "mixed" (a boolean or a value, as --hf-token: refused) or "other" (JSON when it is JSON,
-    else text: Literal choices, enums, mappings and config objects, which vLLM checks when the engine starts)."""
+    else text: Literal choices, enums, mappings and config objects, which are not checked here)."""
     name = _type_name(declared)
     for kind, names in _KINDS.items():
         if name in names:
@@ -290,7 +297,8 @@ def engine_flags(argv: List[str], types: Optional[Mapping[str, Any]] = None) -> 
         name, eq, text = token[2:].partition("=")
         if not _FLAG_NAME.fullmatch(name):
             raise ConfigError(
-                f"engine flag {token!r}: the name must be lower-case words joined by '-' (no dotted names; give a "
+                f"engine flag {token.partition('=')[0]!r}: the name must be lower-case words joined by '-' "
+                f"(no dotted names; give a "
                 f"mapping as JSON, --name={{...}})"
             )
         value: Optional[str] = text if eq else None
@@ -298,34 +306,49 @@ def engine_flags(argv: List[str], types: Optional[Mapping[str, Any]] = None) -> 
             value = argv[i]
             i += 1
         key = name.replace("-", "_")
+        if key in ("hf_token", "no_hf_token"):  # before any message that would repeat the token
+            raise ConfigError("engine flag --hf-token: give a Hugging Face token as the HF_TOKEN variable instead")
+        flag = f"--{name}"  # messages name the flag, not its value
         negated = key.startswith("no_")
         if negated:
             if value is not None:
-                raise ConfigError(f"engine flag {token!r} takes no value (got {value!r}); --{name} alone sets false")
+                raise ConfigError(f"engine flag {flag!r} takes no value (got {value!r}); {flag} alone sets false")
             key = key[3:]
-        if key == "hf_token":
-            raise ConfigError(f"engine flag {token!r}: give a Hugging Face token as the HF_TOKEN variable instead")
+        if key in FORBIDDEN_ENGINE_KWARGS:
+            raise ConfigError(
+                f"engine flag {flag!r}: engine_kwargs.{key} is not allowed; the model comes from llm.yaml's "
+                f"model_source and model_id"
+            )
+        if key in RAY_FRONTEND_ONLY_KWARGS:
+            raise ConfigError(
+                f"engine flag {flag!r}: {key} is not taken here; Ray Serve LLM gives it to vLLM's OpenAI server "
+                f"settings only, not to the engine"
+            )
         kind = None
         if types is not None:
             if key not in types:
+                hint = "vLLM's OpenAI server settings are not taken here"
+                for prefix, other in (("disable_", "enable_"), ("enable_", "disable_")):
+                    opposite = other + key[len(prefix):]
+                    if key.startswith(prefix) and opposite in types:
+                        hint = f"for the opposite of {opposite}, give --no-{opposite.replace('_', '-')}"
                 raise ConfigError(
-                    f"engine flag {token!r}: {key} is not a vLLM engine argument of the vLLM in this image (vLLM's "
-                    f"OpenAI server settings are not taken here)"
+                    f"engine flag {flag!r}: {key} is not a vLLM engine argument of the vLLM in this image ({hint})"
                 )
             kind = value_kind(types[key])
         if kind == "bool" and value is not None:
             raise ConfigError(
-                f"engine flag {token!r}: {key} is a boolean and takes no value; give --{name} for true or "
+                f"engine flag {flag!r}: {key} is a boolean and takes no value; give {flag} for true or "
                 f"--no-{name} for false"
             )
         if kind not in (None, "bool") and value is None:
-            raise ConfigError(f"engine flag {token!r} needs a value: {key} is not a boolean")
+            raise ConfigError(f"engine flag {flag!r} needs a value: {key} is not a boolean")
         if kind == "mixed":
-            raise ConfigError(f"engine flag {token!r}: {key} takes a boolean or a value, a form not taken here")
+            raise ConfigError(f"engine flag {flag!r}: {key} takes a boolean or a value, a form not taken here")
         if value in ("None", ""):
             raise ConfigError(
-                f"engine flag {token!r}: the value {value!r} is not taken (vllm serve reads it as no value); leave the "
-                f"flag out for vLLM's default"
+                f"engine flag {flag!r}: the value {value!r} is not taken (vllm serve reads it as no value); leave "
+                f"the flag out for vLLM's default"
             )
         if value is None:
             parsed: Any = not negated
@@ -333,6 +356,11 @@ def engine_flags(argv: List[str], types: Optional[Mapping[str, Any]] = None) -> 
             parsed = value
         else:
             parsed = _flag_value(value)
+            if parsed is None:
+                raise ConfigError(
+                    f"engine flag {flag!r}: the value {value!r} is not taken (it reads as no value); leave the "
+                    f"flag out for vLLM's default"
+                )
             wrong = {
                 "int": lambda v: not _is_int(v),
                 "number": lambda v: not _is_number(v),
@@ -341,9 +369,9 @@ def engine_flags(argv: List[str], types: Optional[Mapping[str, Any]] = None) -> 
             if wrong is not None and wrong(parsed):
                 what = {"int": "a whole number", "number": "a number",
                         "list": "a list, given as one JSON list (--name=[...])"}[kind]
-                raise ConfigError(f"engine flag {token!r}: {key} takes {what}, got {value!r}")
+                raise ConfigError(f"engine flag {flag!r}: {key} takes {what}, got {value!r}")
         if key in out:
-            raise ConfigError(f"engine flag {token!r}: {key} is given more than once")
+            raise ConfigError(f"engine flag {flag!r}: {key} is given more than once")
         out[key] = parsed
     return out
 
@@ -462,6 +490,18 @@ def _validate(cfg: Dict[str, Any]) -> Dict[str, Any]:
             raise ConfigError(
                 f"engine_kwargs.{key} is not allowed; set model_id / model_source instead"
             )
+    if engine_kwargs.get("disable_log_stats"):
+        # Ray Serve LLM 2.60.0 keeps log_engine_metrics on by default and then refuses disable_log_stats; keda
+        # mode reads those metrics (ray_vllm_num_requests_waiting).
+        raise ConfigError(
+            "engine_kwargs.disable_log_stats is not allowed: Ray Serve LLM's engine metrics need vLLM's stats"
+        )
+    backend = engine_kwargs.get("distributed_executor_backend")
+    if backend is not None and backend != "ray":
+        raise ConfigError(
+            f"engine_kwargs.distributed_executor_backend {backend!r} is not allowed: Ray Serve LLM runs the "
+            f"engine's workers with Ray only (\"ray\")"
+        )
     if "revision" in engine_kwargs:
         kw_revision = engine_kwargs.pop("revision")
         kw_revision = str(kw_revision).strip() if kw_revision is not None else None
