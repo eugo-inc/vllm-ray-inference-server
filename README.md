@@ -993,7 +993,6 @@ off); image already on the node.
 | Against upstream vLLM 0.33.0 | Eugo answered first | Eugo sooner by (median) |
 |---|---|---|
 | With `--attention-backend FLASHINFER`, the best start-up flag we found | 6 of 6 rounds (p = 0.031) | 20.2 s (22%) |
-| As it ships, no flags (an earlier build of Eugo's next image) | 8 of 8 rounds (p = 0.0078) | 54.5 s (30%) |
 
 ### Starts that succeed first time
 
