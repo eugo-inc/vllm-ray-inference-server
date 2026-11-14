@@ -722,6 +722,96 @@ def test_main_bad_config_exits_2(tmp_path, monkeypatch):
     assert serve_app.main(["--config", str(tmp_path / "missing.yaml")]) == 2
 
 
+def test_engine_flags_after_the_programs_own_become_engine_kwargs(tmp_path, monkeypatch, capsys):
+    """The image comparison adds a side's args after the preset's: for the ray-serve-llm preset they are vLLM
+    engine flags, as a vllm-openai side takes them."""
+    monkeypatch.setenv("RAY_TMPDIR", str(tmp_path))
+    for name in serve_app.ENV_OVERRIDES:
+        monkeypatch.delenv(name, raising=False)
+    path = write(tmp_path, CONTRACT_YAML)
+    argv = ["--attention-backend", "FLASHINFER", "--config", path, "--max-num-seqs=64", "--print-config",
+            "--enforce-eager", "--max-model-len", "4096", "--no-enable-prefix-caching"]
+    assert serve_app.main(argv) == 0
+    engine = json.loads(capsys.readouterr().out)["llm_config"]["engine_kwargs"]
+    assert engine["attention_backend"] == "FLASHINFER"
+    assert engine["max_num_seqs"] == 64
+    assert engine["enforce_eager"] is True
+    assert engine["max_model_len"] == 4096
+    assert engine["enable_prefix_caching"] is False
+    assert engine["gpu_memory_utilization"] == 0.85
+
+
+@pytest.mark.parametrize("argv, expected", [
+    ([], {}),
+    (["--attention-backend", "FLASHINFER"], {"attention_backend": "FLASHINFER"}),
+    (["--attention_backend=FLASHINFER"], {"attention_backend": "FLASHINFER"}),
+    (["--max-num-seqs", "64", "--gpu-memory-utilization=0.5"], {"max_num_seqs": 64, "gpu_memory_utilization": 0.5}),
+    (["--enforce-eager", "--max-num-seqs", "8"], {"enforce_eager": True, "max_num_seqs": 8}),
+    (["--max-num-seqs", "8", "--enforce-eager"], {"max_num_seqs": 8, "enforce_eager": True}),
+    (["--enforce-eager", "false"], {"enforce_eager": False}),
+    (["--no-enable-prefix-caching"], {"enable_prefix_caching": False}),
+    (["--seed", "-1"], {"seed": -1}),
+    (["--hf-overrides", '{"rope_scaling": {"factor": 2.0}}'], {"hf_overrides": {"rope_scaling": {"factor": 2.0}}}),
+    (["--compilation-config={\"mode\": 3}"], {"compilation_config": {"mode": 3}}),
+    (["--override-generation-config=temperature=0.5"], {"override_generation_config": "temperature=0.5"}),
+    (["--tokenizer-mode", "auto", "--kv-cache-dtype=fp8"], {"tokenizer_mode": "auto", "kv_cache_dtype": "fp8"}),
+    (["--quantization", "yes"], {"quantization": "yes"}),  # read as JSON, not YAML: "yes" stays text
+    (["--code-revision", "0123"], {"code_revision": "0123"}),  # not JSON (a leading 0): stays text
+    (["--some-flag=-x"], {"some_flag": "-x"}),
+    (["--chat-template", ""], {"chat_template": ""}),
+])
+def test_engine_flags_mapping(argv, expected):
+    assert serve_app.engine_flags(argv) == expected
+
+
+@pytest.mark.parametrize("argv, words", [
+    (["stray"], "a value with no flag before it"),
+    (["--max-num-seqs", "8", "9"], "'9': a value with no flag before it"),
+    (["-tp", "2"], "short flags are not taken"),
+    (["--enforce-eager", "-O3"], "'-O3': short flags are not taken"),
+    (["---odd", "1"], "lower-case words"),
+    (["--compilation-config.mode", "3"], "no dotted names"),
+    (["--Max-Num-Seqs", "8"], "lower-case words"),
+    (["--", "x"], "lower-case words"),
+    (["--=x"], "lower-case words"),
+    (["--max-num-seqs", "8", "--max-num-seqs=16"], "max_num_seqs is given more than once"),
+    (["--max-num-seqs", "8", "--max_num_seqs", "16"], "max_num_seqs is given more than once"),
+    (["--enable-prefix-caching", "--no-enable-prefix-caching"], "enable_prefix_caching is given more than once"),
+    (["--no-enable-prefix-caching", "true"], "takes no value"),
+    (["--no-enable-prefix-caching=false"], "takes no value"),
+])
+def test_engine_flags_it_cannot_map_are_refused(argv, words):
+    with pytest.raises(serve_app.ConfigError, match=re.escape(words)):
+        serve_app.engine_flags(argv)
+
+
+@pytest.mark.parametrize("argv", [["stray"], ["-x", "1"], ["---odd", "1"], ["--model", "other/model"],
+                                  ["--served-model-name", "x"], ["--max-model-len", "lots"],
+                                  ["--seed", "1", "--seed", "2"], ["--", "--seed", "1"]])
+def test_bad_or_forbidden_engine_flags_exit_2(tmp_path, monkeypatch, capsys, argv):
+    monkeypatch.setenv("RAY_TMPDIR", str(tmp_path))
+    path = write(tmp_path, CONTRACT_YAML)
+    assert serve_app.main(["--config", path, "--print-config", *argv]) == 2
+    assert capsys.readouterr().out == ""
+
+
+def test_engine_flags_win_over_the_file_and_the_environment(tmp_path):
+    path = write(tmp_path, CONTRACT_YAML)
+    cfg = serve_app.load_config(path, {"RHVP_GPU_MEMORY_UTILIZATION": "0.7"},
+                                serve_app.engine_flags(["--gpu-memory-utilization", "0.6"]))
+    assert cfg["engine_kwargs"]["gpu_memory_utilization"] == 0.6
+    assert serve_app.load_config(path, {"RHVP_GPU_MEMORY_UTILIZATION": "0.7"})["engine_kwargs"][
+        "gpu_memory_utilization"] == 0.7
+
+
+def test_an_abbreviated_own_option_is_an_engine_flag(tmp_path, monkeypatch, capsys):
+    """allow_abbrev=False: --print is not read as --print-config."""
+    monkeypatch.setenv("RAY_TMPDIR", str(tmp_path))
+    path = write(tmp_path, CONTRACT_YAML)
+    args = serve_app._parse_args(["--config", path, "--print", "1"])
+    assert args.print_config is False and args.engine_flags == ["--print", "1"]
+
+
 def test_rhvp_status_exit_codes_and_output(monkeypatch, capsys):
     assert rhvp_status.exit_code("RUNNING") == 0
     assert rhvp_status.exit_code("DEPLOY_FAILED") == 2

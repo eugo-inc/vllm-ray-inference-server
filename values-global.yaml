@@ -86,6 +86,9 @@ global:
     #                  an image rebuilt under the same tag is not a new run.
     #   custom         set command and args yourself
     # args are added after the preset's own; env adds environment variables.
+    # For ray-serve-llm, args are vLLM engine flags as vllm serve takes them
+    # (--attention-backend FLASHINFER, --max-num-seqs=64, --enforce-eager,
+    # --no-enable-prefix-caching); each becomes an engine setting.
     # In both, {model_id}, {model_source}, {model_revision} and {port} are
     # filled in.
     sides:
