@@ -422,11 +422,15 @@ oc annotate scaledobject/ray-serve-llm -n vllm-inference autoscaling.keda.sh/pau
      vLLM OpenAI server image, `ray-serve-llm` for this pattern's own server image, or `custom` with your own
      `command` and `args`;
    - optionally give a side `args`, added after the preset's own. For `vllm-openai` they are `vllm serve` flags.
-     For `ray-serve-llm` they are vLLM engine flags in the same form, and each becomes a setting of the vLLM engine:
-     `--attention-backend FLASHINFER` sets `attention_backend`, `--max-num-seqs=64` sets `max_num_seqs`,
-     `--enforce-eager` sets `enforce_eager` to true and `--no-enable-prefix-caching` sets `enable_prefix_caching` to
-     false. So both presets take the same `args`. The server refuses to start (exit 2) on a flag it cannot turn into
-     a setting: a short flag such as `-tp`, a dotted name, a flag given twice, or a value with no flag before it;
+     For `ray-serve-llm` they are vLLM's long-form engine and OpenAI server flags, and each becomes a setting of the
+     vLLM engine: `--attention-backend FLASHINFER` sets `attention_backend`, `--max-num-seqs=64` sets
+     `max_num_seqs`, `--enforce-eager` sets `enforce_eager` to true and `--no-enable-prefix-caching` sets
+     `enable_prefix_caching` to false. The server checks each name and value against the vLLM in its image before
+     Ray starts, and refuses to start (exit 2) on a flag it cannot turn into a setting: a name that vLLM does not
+     have, a flag with no value that is not a boolean, a value for a boolean, a short flag such as `-tp`, a dotted
+     name, a flag given twice, a value with no flag before it, `--model` and `--served-model-name` (the model comes
+     from `global.model`), and `--host`, `--port` and `--uds` (the port comes from the comparison). `--config` and
+     `--print-config` are the server's own options, not vLLM's;
    - check `runName`, `rounds` (`count`, `warmup`, `twins`), `load` and `analysis` (`alpha`, `primary`). The
      comments there explain each setting.
 3. Commit and push. Argo CD creates the Job `compare-<runName>-<hash>` in `vllm-notebook`. We expect the `notebook`
