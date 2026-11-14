@@ -98,14 +98,15 @@ LOAD_RETRIED_SCALE = ("After a time-out GuideLLM, the router and the replicas th
                       "the launch ran again from a new first replica, timed from that start, with the same requests "
                       "and a new second replica; every figure of such a launch comes from that second try. A second "
                       "time-out fails the launch (LOAD_FAILED).")
-LOAD_RETRIED_NONE = ("None of them ran again: each failed before its second try sent a request, so it has no "
-                     "figures (the files of its first try are its *.try-1.* files).")
-LOAD_RETRIED_NONE_ONE = ("It failed before its second try sent a request, so it has no figures (the files of its first "
-                         "try are its *.try-1.* files).")
-LOAD_RETRIED_SOME = ("A launch that did not run again failed before its second try sent a request, so it has no "
-                     "figures.")
+LOAD_RETRIED_NONE = ("None of them ran again: each failed or was stopped before a second try started GuideLLM, so it "
+                     "has no figures.")
+LOAD_RETRIED_NONE_ONE = "It failed or was stopped before a second try started GuideLLM, so it has no figures."
+LOAD_RETRIED_SOME = ("A launch that did not run again failed or was stopped before a second try started GuideLLM, so "
+                     "it has no figures.")
 LOAD_RETRIED_RAN = "{index} ({side}): ran again"
 LOAD_RETRIED_NOT = "{index} ({side}): did not run again ({code})"
+LOAD_RETRIED_NOT_KEPT = ("{index} ({side}): did not run again ({code}; the files of its first try are its *.try-1.* "
+                         "files)")
 RUN_LEVELS = "Load levels left out, where requests failed or none finished: {levels}."
 RUN_LEVEL = "launch {index} ({side}) at {concurrency} streams"
 RUN_SURGES = ("Surges in which requests failed or none finished: {surges}. Only their latency medians are left out: "
@@ -248,6 +249,13 @@ SCALE_RATE_ALL_MISSED = ("In every scored surge, on both sides, at most 5% of th
                          "finished or failed) met the latency goals: the rate kept both sides past the goals for "
                          "nearly every request. A lower scaleOut.requestRate may suit these sides (README, \"Picking "
                          "the surge rate\").")
+#: summary.surge_capped: one side met the goals for every request in enough of its (and its twin's) surges.
+SCALE_RATE_ONE_SIDE = ("Side {side} and its twin met the latency goals for every request in {met} of their {surges} "
+                       "scored surges. The share within the goals cannot rise above 1, so in those surges side {side} "
+                       "and its twin read the same: side {side}'s noise floor for that case is 0, and the case gets NO "
+                       "VERDICT (a noise floor of exactly 0), however far apart the two sides are. A higher "
+                       "scaleOut.requestRate, one that a single replica of side {side} cannot serve within the goals, "
+                       "suits these sides (README, \"Picking the surge rate\").")
 #: summary.surge_rate_fit's answer -> its note.
 SCALE_RATE_NOTES = {"all_met": SCALE_RATE_ALL_MET, "all_failed": SCALE_RATE_ALL_FAILED,
                     "all_missed": SCALE_RATE_ALL_MISSED}

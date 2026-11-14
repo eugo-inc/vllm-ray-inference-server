@@ -455,9 +455,6 @@ def build(config: Mapping, platform: str = "openshift") -> dict:
     _removed(config)
     cfg = _merge(DEFAULTS, config)
     mode = cfg.get("mode", DEFAULT_MODE)
-    if mode == "pairs":
-        raise PlanError("mode pairs is no longer read; the default mode is now called levels (each launch starts one "
-                        "server and loads it at load.concurrencies). Set mode: levels, or leave mode out")
     if mode not in MODES:
         raise PlanError(f"mode must be one of {', '.join(MODES)}; got {mode!r}")
     if platform not in MODE_PLATFORMS[mode]:

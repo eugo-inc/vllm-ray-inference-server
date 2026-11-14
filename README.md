@@ -828,7 +828,7 @@ the ScaledObject), and removes the pause when the run ends.
 `global.compare.mode: scaleout` measures how fast each image brings a second replica online under load, and how much
 of that load stays within latency goals. It keeps the comparison's rounds of A, A~same, B and B~same, its statistics
 and its verdicts ([How the verdicts are decided](#how-the-verdicts-are-decided)); the default mode, described above,
-is `levels` (its earlier name, `pairs`, is refused with a message). For now `scaleout` runs only with docker
+is `levels`. For now `scaleout` runs only with docker
 (`scripts/compare-local.sh`); the OpenShift Job refuses it (exit 2, `PLAN_INVALID`) until its scale round is built.
 The commented example at the end of `global.compare` in `values-global.yaml` shows the settings.
 
@@ -862,16 +862,19 @@ surge would find its own requests in that replica's prefix cache, which no other
 launch then comes from that second try; the first try's files stay in the launch's folder as `*.try-1.*`, its server
 records stay in the launch, marked `discarded` (a memory-check retry of a discarded replica is counted there, and
 `results.md` names that replica), the launch's `load_retries` is 1, and `results.md` and the notebook list the
-launch. A second time-out fails the launch with `LOAD_FAILED`. A launch that fails before its second try sends a
-request (a replica that cannot be stopped, or the run being stopped) is listed as one that did not run again; it has
-no figures.
+launch. A second time-out fails the launch with `LOAD_FAILED`. A launch that fails or is stopped before its second
+try starts GuideLLM (a replica that cannot be stopped, a new first replica that does not start, or the run being
+stopped) is listed as one that did not run again; it has no figures. Its first try's files are its `*.try-1.*` files,
+and `results.md` and the notebook say so, unless the run was stopped while the timed-out GuideLLM was still being
+taken down: that try was never set aside, and its files keep their own names.
 
 The two primary cases are the second replica's time to first answer (`scale/first_answer_s`) and that share of the
 requests within the goals (`surge/slo_attainment`). With Holm's correction over two cases, 7 rounds are the fewest
 that can give a verdict, and at 8 rounds all 8 must lean the same way. For the share within the goals, BETTER means
 side B met the goals for more of the requests. Each case is a floor group of its own. A figure of 0 is not a ratio: a
 surge in which no request finished, or none met the goals, gives 0 for the share and for goodput, and that case gets
-NO VERDICT (`nonpositive_value`), as a 0 does in mode `levels`. The other cases are secondary, among them when a
+NO VERDICT (`nonpositive_value`), as a 0 does in mode `levels`, unless a reason the analysis checks first applies
+(launches on more than one node, or a side that failed). The other cases are secondary, among them when a
 server's own `rhvp-scale` lines show a load-triggered scale-up. The `llm.yaml` the runner writes for this pattern's
 server fixes one replica (`min_replicas` and `max_replicas` 1), so a side with preset `ray-serve-llm` logs no
 scale-up and that case stays empty for it, which says nothing about the server's autoscaling. Only a side that brings
@@ -924,6 +927,11 @@ After a run, `results.md` and the notebook say when the rate did not tell the si
 surge of both sides: each met the goals for all of its requests (raise the rate); in each, at least half of the
 requests GuideLLM judged (those that finished or failed) failed (lower it); or in each, at most 5% of them met the
 goals (lower it). Fewer failed requests than that, or a share within the goals above 5% in some surge, gives no note.
+A share cannot rise above 1, so when a side and its twin both met the goals for every request in about half of their
+rounds or more (and the other side did not in every surge, which the first note covers), their median ratio is 1,
+that side's noise floor for the share is 0, and the share gets NO VERDICT (`zero_floor`) however far apart the sides
+are. `results.md` and the notebook then name each such side and say to raise `scaleOut.requestRate` to a rate that
+one replica of it cannot serve within the goals.
 
 `scripts/compare-local.sh tests/fixtures/compare-scaleout-mock.json <results folder>` runs the mode against GuideLLM's
 mock servers, with no GPU. Extra settings for this mode: `REPLICA_GPUS` (one GPU id per replica, such as `0,1`, for

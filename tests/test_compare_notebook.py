@@ -23,7 +23,7 @@ SYNTHETIC = NOTEBOOKS / "compare-recordings" / "synthetic.json"
 sys.path.insert(0, str(NOTEBOOKS))
 sys.path.insert(0, str(ROOT / "tests"))
 
-from rhvp_compare import cells, example, report, show, summary, words  # noqa: E402
+from rhvp_compare import analyze, cells, example, report, show, summary, words  # noqa: E402
 from test_notebook_rules import CAUSE, HARDWARE, VENDOR, _strings, _visible  # noqa: E402
 
 SCHEMA = json.loads((NOTEBOOKS / "rhvp_compare" / "results.schema.json").read_text())
@@ -151,6 +151,22 @@ def test_a_results_file_of_the_earlier_rule_is_skipped_with_a_notice(tmp_path, m
     found, problems = show.load_all()
     assert len(found) == 1 and found[0]["schema"] == "rhvp-image-compare/2"
     assert problems == [words.OLD_SCHEMA.format(schema="rhvp-image-compare/1")]
+
+
+def test_a_results_file_from_before_the_server_records_and_the_cache_setting_is_still_read(monkeypatch):
+    # The /2 schema gained launches[].servers and sides[].compile_cache; files written before them, without either,
+    # still validate and are read with their defaults (no server records; cold caches).
+    data = example.synthesize()
+    for launch in data["launches"]:
+        del launch["servers"]
+    for side in data["plan"]["sides"]:
+        del side["compile_cache"]
+    data["launches"][2].update(start_retries=1, starts=2)  # a memory-check retry, read without its server records
+    jsonschema.validate(data, SCHEMA)
+    text = report.markdown(data)
+    assert f"- launch {data['launches'][2]['index']} ({data['launches'][2]['side']}): started 2 times in all" in text
+    for call in (show.runs, show.verdicts, show.startup, show.energy, show.provenance):
+        _shown(monkeypatch, data, call)
 
 
 # ---- mode scaleout ----
@@ -283,6 +299,43 @@ def test_results_md_shows_each_replicas_gpu_request_with_its_uuids():
             "(`GPU-00000000-0000-0000-0000-000000000000`) or `1` (UUID not read).") in markdown
     assert "with the UUIDs nvidia-smi read through each request before the first launch" in markdown
     assert "For a MIG device the UUID is its parent GPU's." in markdown
+
+
+def _capped(results: dict, side: str, rounds: range) -> dict:
+    """`results` with side `side` and its twin at a share within the goals of 1 in `rounds`, analysed again."""
+    for x in _scored(results, side, twin=True):
+        if x["round"] in rounds:
+            x["levels"][0]["slo_attainment"] = 1.0
+            x["values"]["surge/slo_attainment"] = 1.0
+    results["analysis"] = analyze.analyze(results)
+    return results
+
+
+@pytest.mark.parametrize("rounds", [range(1, 5), range(1, 9)])
+def test_one_side_at_a_share_of_1_is_named_with_the_rate_to_raise(monkeypatch, rounds):
+    # Side B and its twin meet every goal in half of the rounds or in all: B's ratio to its twin sits on 1, its noise
+    # floor is 0, and the share within the goals gets NO VERDICT (zero_floor) although B is clearly better. Both
+    # results.md and the notebook say why, and which rate to raise.
+    results = _capped(example.synthesize_scale_out(), "B", rounds)
+    row = next(c for c in results["analysis"]["comparisons"] if c["case"] == "surge/slo_attainment")
+    assert (row["verdict"], row["reason"]) == ("NO VERDICT", "zero_floor") and row["ratio"] > 1.15
+    assert summary.surge_rate_fit(results) is None
+    met = 2 * len(rounds)  # side B's and its twin's surges in those rounds
+    assert summary.surge_capped(results) == [{"side": "B", "met": met, "surges": 16}]
+    note = words.SCALE_RATE_ONE_SIDE.format(side="B", met=met, surges=16)
+    assert note in report.markdown(results)
+    assert note in _shown(monkeypatch, results, show.scale_out)
+
+
+def test_no_side_is_named_when_its_share_was_never_1_or_both_sides_met_every_goal():
+    results = example.synthesize_scale_out()
+    assert summary.surge_capped(results) == []  # the made-up shares stay below 1: BETTER, no note
+    for level in _surges(results):
+        level.update(slo_attainment=1.0, requests={"successful": 300, "errored": 0, "incomplete": 0})
+    for x in _scored(results):
+        x["values"]["surge/slo_attainment"] = 1.0
+    results["analysis"] = analyze.analyze(results)
+    assert summary.surge_rate_fit(results) == "all_met" and summary.surge_capped(results) == []
 
 
 def test_the_surge_rate_thresholds_are_the_ones_the_notes_state():

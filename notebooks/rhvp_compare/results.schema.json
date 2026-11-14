@@ -344,8 +344,7 @@
         "preset",
         "args",
         "env",
-        "gpu",
-        "compile_cache"
+        "gpu"
       ],
       "properties": {
         "key": {
@@ -398,7 +397,7 @@
             "cold",
             "warm"
           ],
-          "description": "sides[].compileCache: cold, a fresh /cache at every start; warm (docker only), a volume kept for the run and filled by the side's warm-up launch (its twin's launches use the same volume)."
+          "description": "sides[].compileCache: cold, a fresh /cache at every start; warm (docker only), a volume kept for the run and filled by the side's warm-up launch (its twin's launches use the same volume). Absent in a results file from before the setting (read as cold)."
         }
       }
     },
@@ -1144,8 +1143,7 @@
         "start_retries",
         "starts",
         "load_timeouts",
-        "load_retries",
-        "servers"
+        "load_retries"
       ],
       "properties": {
         "index": {
@@ -1364,7 +1362,7 @@
           "items": {
             "$ref": "#/$defs/server"
           },
-          "description": "Every server the launch started, as a server record: replica 1 the side (in mode scaleout its first replica), replica 2 the replica the forced step adds. A launch that ran again (load_retries) lists its discarded try's records first."
+          "description": "Every server the launch started, as a server record: replica 1 the side (in mode scaleout its first replica), replica 2 the replica the forced step adds. A launch that ran again (load_retries) lists its discarded try's records first. Absent in a results file from before the server records (read as none)."
         },
         "scale": {
           "type": [
@@ -1419,7 +1417,7 @@
                 },
                 "joined_during_surge": {
                   "type": "boolean",
-                  "description": "false when the surge had ended before the replica answered: it got no requests."
+                  "description": "false when the replica joined the router only after the surge's last request (or after GuideLLM ended): it got no requests. runner.joined_during_surge."
                 },
                 "clock": {
                   "type": "string"

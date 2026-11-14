@@ -30,7 +30,7 @@ image-registry.openshift-image-registry.svc:5000/{{ .Release.Namespace }}/notebo
 {{- $cfg := omit (.Values.global.compare | default dict) "enabled" -}}
 {{- if hasKey $cfg "mode" -}}
 {{- if not (and (kindIs "string" $cfg.mode) (has $cfg.mode (list "levels" "scaleout"))) -}}
-{{- $msg := "global.compare.mode must be levels or scaleout (mode pairs is now called levels); got %v" -}}
+{{- $msg := "global.compare.mode must be levels or scaleout; got %v" -}}
 {{- fail (printf $msg $cfg.mode) -}}
 {{- end -}}
 {{- if eq $cfg.mode "levels" }}{{ $cfg = omit $cfg "mode" }}{{ end -}}

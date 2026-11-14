@@ -361,12 +361,13 @@ of the requests of a client that kept 8 connections open; through `rhvp_compare/
 comparison's mode ran end to end with docker against GuideLLM mock servers
 (`tests/fixtures/compare-scaleout-mock.json`: 7 rounds with twins, 28 launches, 56 server starts, about 46 minutes on
 CPU): it completed with schema-valid results and the notebook rendered them. The faster-starting mock's second
-replica gave `scale/first_answer_s` FASTER. The second replica got a share of the surge in 26 of the 28 launches; in
-two of side A's it answered about a second before the 40-second surge ended and got none. The mock servers met the
-goals for every request, so `surge/slo_attainment` was 1 in every launch and got NO VERDICT (`zero_floor`). With
-real vLLM servers it ran only in an earlier version, under the earlier rule (rounds of A and B, no twins), on one
-machine with one GPU: three runs of one round each, one complete, two partial because nearly every request missed
-the goals at the rate they used.
+replica gave `scale/first_answer_s` FASTER. The second replica got a share of the surge in 26 of the 28 launches. In
+launch 20 (side A) and launch 15 (A~same, side A's twin) it joined the router 1.0 s and 1.9 s after the surge's last
+request (sent 40 s after the first, while GuideLLM still ran) and got none; that run marked both as joined during the
+surge, and `runner.joined_during_surge` now marks them as after it. The mock servers met the goals for every request, so
+`surge/slo_attainment` was 1 in every launch and got NO VERDICT (`zero_floor`). With real vLLM servers it ran only in an
+earlier version, under the earlier rule (rounds of A and B, no twins), on one machine with one GPU: three runs of one
+round each, one complete, two partial because nearly every request missed the goals at the rate they used.
 
 Not checked yet:
 

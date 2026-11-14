@@ -25,7 +25,8 @@ GuideLLM's surge goes through the router. At scale_out.step_after_s after the ro
 (the forced step), the runner starts a second replica of the same side, times it from its start to its first answer,
 and adds it to the router. The launch keeps how many requests each replica got (`scale.router`), so the new
 replica's share of the surge is on record. A second replica that never answers fails the launch (SIDE_NEVER_READY);
-one that answers only after the surge has ended is still timed, with a share of 0. A twin's scale round is its
+one that answers only after the surge has ended is still timed, with a share of 0 (`joined_during_surge`: it
+joined the router after its last request, which GuideLLM can outlive by a few seconds). A twin's scale round is its
 side's. When GuideLLM times out, the launch runs once more as in mode levels (LOAD_RETRIES): GuideLLM, the router and
 the replicas that had started are taken down, and a new first replica is started and timed, then the surge runs with
 the same requests and a new second replica.
@@ -704,6 +705,8 @@ class Runner:
         record["scale"]["router"] = self._router_stats(router.stats(), [target, target2], surge_at)
         sent = [b["sent"] for b in record["scale"]["router"]["backends"]]
         record["scale"]["new_replica_share"] = round(sent[1] / sum(sent), 4) if sum(sent) else None
+        record["scale"]["new_replica"]["joined_during_surge"] = joined_during_surge(
+            record["scale"]["new_replica"]["joined_at_s"], record["scale"]["router"]["backends"], surge_over)
 
     def _router_stats(self, counts: Mapping, targets: list[str], surge_at: float) -> dict:
         """The router's counts per replica (replica 1 first), its times in seconds after the surge's start."""
@@ -998,6 +1001,20 @@ def _renamed(text: str, renamed: Mapping[str, str]) -> str:
 
 def _iso(epoch: float) -> str:
     return datetime.fromtimestamp(epoch, tz=timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def joined_during_surge(joined_at_s: float, backends: list[Mapping], surge_over: bool) -> bool:
+    """Whether the added replica joined the router while the surge still sent requests: the router sent it one, or
+    it joined before the router's last request (times in seconds after the surge's first request, as in
+    `scale.router`). GuideLLM runs on for a few seconds after its last request, so a replica that answers in those
+    seconds joins a router that sends nothing more: that is after the surge, as is one that answers after GuideLLM
+    ended (`surge_over`)."""
+    if len(backends) > 1 and backends[1].get("sent"):
+        return True
+    last = [b["last_s"] for b in backends if isinstance(b.get("last_s"), (int, float))]
+    if not last:  # the router said nothing about its requests: only GuideLLM's own end is known
+        return not surge_over
+    return not surge_over and joined_at_s < max(last)
 
 
 def summary_epoch(text: str | None) -> float | None:

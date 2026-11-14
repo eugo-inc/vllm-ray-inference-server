@@ -88,7 +88,7 @@ def test_values_check_names_every_mode():
     ({"global": {"scaleOut": {"mode": "hpa"}}}, "global.scaleOut.mode must be none or keda; got hpa"),
     ({"global": {"scaleOut": {"mode": False}}}, "global.scaleOut.mode must be none or keda"),
     ({"global": {"compare": {"mode": "surge"}}},
-     "global.compare.mode must be levels or scaleout (mode pairs is now called levels); got surge"),
+     "global.compare.mode must be levels or scaleout; got surge"),
     ({"server": {"minReplicas": 2}}, pattern_settings.MOVED),
     ({"server": {"autoscaling": {"minReplicas": 0}}}, "server.autoscaling.minReplicas must be a whole number"),
     ({"server": {"autoscaling": {"maxReplicas": 1.5}}}, "server.autoscaling.maxReplicas must be a whole number"),
@@ -218,7 +218,7 @@ def test_values_check_runs_in_validate_values(tmp_path):
     ("keda-cooldown", "scaleOut.cooldownSeconds must be a whole number from 0 to 3600; got 7200"),
     ("replicas-moved", pattern_settings.MOVED),
     ("compare-mode-unknown",
-     "global.compare.mode must be levels or scaleout (mode pairs is now called levels); got surge"),
+     "global.compare.mode must be levels or scaleout; got surge"),
 ])
 def test_charts_refuse_with_the_values_check_message(render, case, message):
     assert message in (render / f"refused/{case}.txt").read_text()

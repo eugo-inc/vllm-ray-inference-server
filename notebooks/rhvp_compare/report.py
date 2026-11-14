@@ -160,6 +160,8 @@ def markdown(results: Mapping) -> str:
         fit = summary.surge_rate_fit(results)
         if fit:
             lines += ["", "**" + words.SCALE_RATE_NOTES[fit] + "**"]
+        for capped in summary.surge_capped(results):
+            lines += ["", "**" + words.SCALE_RATE_ONE_SIDE.format(**capped) + "**"]
     launches = results.get("launches") or []
     failed = [r for r in launches if r.get("status") != "ok"]
     if failed:
@@ -183,19 +185,20 @@ def markdown(results: Mapping) -> str:
                "the side was taken down and the launch ran again from a new start, timed from that start, with the "
                "same requests")
         ran = [r for r in timed_out if r.get("load_retries")]
+        not_ran = "failed or was stopped before a second try started GuideLLM, so it has no figures"
         if ran:
-            not_ran = ("; a launch that did not run again failed before its second try sent a request, so it has no "
-                       "figures" if len(ran) < len(timed_out) else "")
+            rest = f"; a launch that did not run again {not_ran}" if len(ran) < len(timed_out) else ""
             lines += ["", f"Launches whose GuideLLM timed out (after a time-out {how}; every figure of such a launch "
-                      f"comes from that second try, and the first try's files are its *.try-1.* files{not_ran}):"]
-        else:  # each failed before its second try sent a request
-            which = ("none of them ran again: each failed" if len(timed_out) > 1 else "it failed")
-            lines += ["", f"Launches whose GuideLLM timed out ({which} before its second try sent a request, so it "
-                      f"has no figures; the first try's files are its *.try-1.* files):"]
+                      f"comes from that second try, and the first try's files are its *.try-1.* files{rest}):"]
+        else:
+            which = "none of them ran again: each" if len(timed_out) > 1 else "it"
+            lines += ["", f"Launches whose GuideLLM timed out ({which} {not_ran}):"]
         lines += [f"- launch {r['index']} ({r['side']}): timed out {r['load_timeouts']} "
                   f"time{'s' if r['load_timeouts'] > 1 else ''}, "
                   + ("ran again, then " if r.get("load_retries") else "did not run again, then ")
                   + ("finished" if r.get("status") == "ok" else (r.get("error_code") or "failed"))
+                  + ("; its first try's files are its *.try-1.* files"
+                     if not r.get("load_retries") and summary.first_try_kept(r) else "")
                   for r in timed_out]
     for mixed in summary.energy_methods_mixed(results):
         lines += ["", f"**Two energy methods at {mixed['concurrency']} streams:** tokens per joule came from the "

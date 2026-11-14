@@ -99,6 +99,13 @@ SURGE_FAILED_SHARE = 0.5
 SURGE_MET_SHARE_LOW = 0.05
 
 
+def first_try_kept(launch: Mapping) -> bool:
+    """Whether `launch` kept the files of a try it set aside after a GuideLLM time-out (its *.try-N.* files, artifact
+    keys *_try_N). A launch stopped while its timed-out GuideLLM, or the power sampler after it, was being stopped
+    never set its try aside, and has none."""
+    return any("_try_" in key for key in launch.get("artifacts") or {})
+
+
 def surge_rate_fit(results: Mapping) -> str | None:
     """Mode scaleout, when the surge rate did not separate the sides, from what every scored surge of both sides
     (their twins' too) measured: "all_met" when each met the latency goals for every request it judged and none
@@ -134,6 +141,33 @@ def surge_rate_fit(results: Mapping) -> str | None:
     if all(isinstance(share := met(lv), (int, float)) and share <= SURGE_MET_SHARE_LOW for lv in every):
         return "all_missed"
     return None
+
+
+def surge_capped(results: Mapping) -> list[dict]:
+    """Mode scaleout, when the rate let one side meet the goals for every request: per side whose noise floor on
+    surge/slo_attainment is exactly 0 (so that case gets NO VERDICT, zero_floor) and whose own or twin's scored
+    surges reached a share of 1, {"side", "met", "surges"}: how many of those surges met the goals for every request,
+    of how many. A share cannot rise above 1, so in such surges the side and its twin read the same, and their
+    median ratio sits on 1. Empty when surge_rate_fit already names the rate (both sides met every goal), and in
+    mode levels."""
+    if (results.get("plan") or {}).get("mode") != "scaleout" or surge_rate_fit(results) == "all_met":
+        return []
+    row = next((c for c in (results.get("analysis") or {}).get("comparisons") or []
+                if c.get("case") == "surge/slo_attainment"), None)
+    if row is None or row.get("reason") != "zero_floor":
+        return []
+    floors = row.get("floor") or {}
+    out = []
+    for side, key in (("A", "baseline"), ("B", "subject")):
+        if (floors.get(key) or {}).get("value") != 0:
+            continue
+        shares = [lv.get("slo_attainment") for r in results.get("launches") or []
+                  if r.get("kind") == "scored" and r.get("status") == "ok" and r.get("of", r.get("side")) == side
+                  for lv in r.get("levels") or [] if lv.get("concurrency") is None]
+        met = sum(1 for share in shares if share == 1)
+        if met:
+            out.append({"side": side, "met": met, "surges": len(shares)})
+    return out
 
 
 def energy_methods_mixed(results: Mapping) -> list[dict]:

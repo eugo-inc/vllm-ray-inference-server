@@ -381,7 +381,9 @@ def test_plan_scale_out_mode():
     assert plans.build(scale_config(scaleOut={"tpotMs": None}), "docker")["scale_out"]["slo"] == {
         "ttft_ms": 200, "tpot_ms": None}
     assert plans.build(config(), "docker")["sides"][0]["compile_cache"] == "cold"
-    assert "servers" in SCHEMA["$defs"]["launch"]["required"]  # every launch of every mode writes it
+    # Every launch of every mode writes it; the schema leaves it optional, for /2 files written before it.
+    launch_schema = SCHEMA["$defs"]["launch"]
+    assert "servers" in launch_schema["properties"] and "servers" not in launch_schema["required"]
 
 
 @pytest.mark.parametrize("extra, platform, message", [
@@ -393,7 +395,7 @@ def test_plan_scale_out_mode():
     ({"server": {"gpuMemoryUtilization": 0.6}}, "docker", "two of them need it at most 0.475"),
     ({"energy": {"source": "nvidia-smi"}}, "docker", "is not measured in mode scaleout"),
     ({"analysis": {"primary": ["c4/ttft_ms_median"]}}, "docker", "does not have: c4/ttft_ms_median"),
-    ({"mode": "pairs"}, "docker", "mode pairs is no longer read"),
+    ({"mode": "pairs"}, "docker", "mode must be one of levels, scaleout; got 'pairs'"),
     ({"mode": "surge"}, "docker", "mode must be one of levels, scaleout"),
 ])
 def test_plan_scale_out_mode_refusals(extra, platform, message):
@@ -782,9 +784,11 @@ def test_a_launch_cut_short_between_its_tries_keeps_none_of_the_first_try(tmp_pa
     assert f"- launch 1 (A): timed out 1 time, did not run again, then {code}" in text
     assert "ran again" not in text.split("- launch 1 (A): timed out", 1)[1].splitlines()[0]
     assert "every figure of such a launch" not in text and "none of them" not in text
-    assert "(it failed before its second try sent a request, so it has no figures" in text
+    assert "(it failed or was stopped before a second try started GuideLLM, so it has no figures):" in text
+    assert f"did not run again, then {code}; its first try's files are its *.try-1.* files" in text  # set aside
     head = "".join(show._head(results, [], []))
     assert words.LOAD_RETRIED_NONE_ONE in head and words.LOAD_RETRIED_NONE not in head
+    assert words.LOAD_RETRIED_NOT_KEPT.format(index=1, side="A", code=code) in head
     assert words.LOAD_RETRIED_HOW not in head
     if code == "STOPPED":
         assert results["run"]["error_code"] == "STOPPED" and [x["index"] for x in results["launches"]] == [1]
@@ -796,7 +800,7 @@ def test_two_timed_out_launches_that_did_not_run_again_are_named_as_more_than_on
     second = results["launches"][1]
     second.update(status="failed", error_code="LOAD_FAILED", load_timeouts=1, load_retries=0)
     text = report.markdown(results)
-    assert "(none of them ran again: each failed before its second try sent a request" in text
+    assert "(none of them ran again: each failed or was stopped before a second try started GuideLLM" in text
     assert "(it failed before" not in text
     head = "".join(show._head(results, [], []))
     assert words.LOAD_RETRIED_NONE in head and words.LOAD_RETRIED_NONE_ONE not in head
@@ -944,10 +948,19 @@ class TermInFirstSamplerStop(FakeBackend):
 
 
 def test_a_stop_while_the_sampler_stops_after_a_time_out_still_counts_it(tmp_path):
-    results, _, _ = run(tmp_path, TermInFirstSamplerStop(hang_once=True), rounds=ONE_ROUND)
+    results, _, the_runner = run(tmp_path, TermInFirstSamplerStop(hang_once=True), rounds=ONE_ROUND)
     failed = results["launches"][0]
     assert (failed["error_code"], failed["load_timeouts"], failed["load_retries"]) == ("STOPPED", 1, 0)
     assert results["analysis"]["load_timeouts"]["A"] == 1
+    # The stop came before the try was set aside: no *.try-1.* files, and neither results.md nor the notebook
+    # names any.
+    assert not summary.first_try_kept(failed)
+    assert not [p.name for p in (the_runner.dir / "launches/01-A-scored").iterdir() if ".try-" in p.name]
+    text = (the_runner.dir / "results.md").read_text()
+    assert "(it failed or was stopped before a second try started GuideLLM, so it has no figures):" in text
+    assert "- launch 1 (A): timed out 1 time, did not run again, then STOPPED\n" in text and "try-1" not in text
+    head = "".join(show._head(results, [], []))
+    assert words.LOAD_RETRIED_NOT.format(index=1, side="A", code="STOPPED") + "." in head and "try-1" not in head
 
 
 def test_a_twins_zero_gives_its_floor_group_no_verdict_and_is_shown_in_the_notebook(tmp_path):
@@ -1591,6 +1604,19 @@ def scale_run(tmp_path, backend: ScaleBackend, clock: FakeClock, **extra):
     return the_runner.run(), the_runner
 
 
+def _shown_scale(results: dict) -> str:
+    """The text of the notebook's scale-out cell for `results`, without a kernel."""
+    out = []
+    pick, draw_show = show.pick, show.draw.show
+    show.pick = lambda run=None: (results, [results], [])
+    show.draw.show = lambda *parts: out.extend(parts)
+    try:
+        show.scale_out()
+    finally:
+        show.pick, show.draw.show = pick, draw_show
+    return "".join(out)
+
+
 def _servers(launch: dict, *keys: str) -> list[tuple]:
     return [tuple(item[key] for key in ("replica", *keys)) for item in launch["servers"]]
 
@@ -1694,6 +1720,61 @@ def test_a_new_replica_that_answers_after_the_surge_is_timed_with_a_share_of_0(t
     assert scored["scale"]["new_replica_share"] == 0 and "scale/first_answer_s" in scored["values"]
 
 
+class DrainedRouter(FakeRouter):
+    """Launch 20 of the recorded docker mock run (a 40 s surge): the router's last request went to replica 1 at
+    40.0 s after the surge's first, and replica 2 joined at 41.0 s, while GuideLLM was still winding down."""
+
+    def add(self, target):
+        self.targets.append(target)
+        self.joined = self.first_at + 41.001
+        return {"url": target, "joined_at": self.joined}
+
+    def stats(self):
+        self.first_at = self.first_at or self.clock.wall()
+        backends = [{"url": self.targets[0], "sent": 401, "finished": 389, "failed": 0, "cancelled": 12,
+                     "max_in_flight": 14, "first_at": self.first_at, "last_at": self.first_at + 40.0}]
+        if self.joined:
+            backends.append({"url": self.targets[1], "sent": 0, "finished": 0, "failed": 0, "cancelled": 0,
+                             "max_in_flight": 0, "first_at": None, "last_at": None})
+        return {"policy": "least-busy", "first_request_at": self.first_at, "backends": backends}
+
+
+class DrainedBackend(ScaleBackend):
+    def router(self, plan, targets, out_dir):
+        self.routers.append(DrainedRouter(targets, self.clock, 0.0, out_dir))
+        return self.routers[-1]
+
+
+def test_a_new_replica_that_joins_after_the_routers_last_request_is_after_the_surge(tmp_path):
+    # GuideLLM was still running when replica 2 joined, but the router had sent its last request a second before:
+    # replica 2 got none. It answered after the surge, so it is counted there and left out of the join median.
+    clock = FakeClock()
+    backend = DrainedBackend(clock)
+    results, the_runner = scale_run(tmp_path, backend, clock, rounds=ONE_ROUND)
+    jsonschema.validate(results, SCHEMA)
+    scored = results["launches"][0]
+    assert (scored["index"], scored["side"], scored["status"]) == (1, "A", "ok")
+    assert backend.loads[0].poll() == 0 and not backend.loads[0].stopped  # GuideLLM itself ended normally
+    new = scored["scale"]["new_replica"]
+    assert new["joined_at_s"] == 41.001 and new["joined_during_surge"] is False
+    assert scored["scale"]["router"]["backends"][0]["last_s"] == 40.0 and scored["scale"]["new_replica_share"] == 0
+    text = (the_runner.dir / "results.md").read_text()
+    # Side A's row: 1 launch, asked for at 5 s, no join time in the median, a share of 0, 1 answered after the surge.
+    assert "| A | 1 | 5.00 s | - | 0.0% | 1 |" in text.splitlines()
+    assert words.SCALE_LATE.format(launches="1, 3") in _shown_scale(results)  # launches 1 (A) and 3 (B)
+
+
+@pytest.mark.parametrize("joined_at_s, backends, surge_over, expected", [
+    (41.001, [{"sent": 401, "last_s": 40.0}, {"sent": 0, "last_s": None}], False, False),  # after the last request
+    (5.2, [{"sent": 30, "last_s": 39.9}, {"sent": 0, "last_s": None}], False, True),  # in time, though sent none
+    (5.2, [{"sent": 30, "last_s": 39.9}, {"sent": 10, "last_s": 39.8}], False, True),  # it got requests
+    (5.2, [{"sent": 30, "last_s": 39.9}, {"sent": 0, "last_s": None}], True, False),  # GuideLLM had ended
+    (5.2, [{"sent": 0, "last_s": None}, {"sent": 0, "last_s": None}], False, True),  # no router times: GuideLLM's
+])
+def test_joined_during_surge(joined_at_s, backends, surge_over, expected):
+    assert runner.joined_during_surge(joined_at_s, backends, surge_over) is expected
+
+
 def test_a_new_replica_that_never_answers_fails_the_launch(tmp_path):
     clock = FakeClock()
     backend = ScaleBackend(clock, never_ready=1)
@@ -1765,7 +1846,8 @@ def test_the_time_out_list_says_which_launches_ran_again(tmp_path):
     text = report.markdown(results)
     assert "- launch 3 (A): timed out 1 time, ran again, then finished" in text
     assert "- launch 7 (A~same): timed out 1 time, did not run again, then RUNNER_ERROR" in text
-    assert ("; a launch that did not run again failed before its second try sent a request, so it has no figures):"
+    assert ("; a launch that did not run again failed or was stopped before a second try started GuideLLM, so it has "
+            "no figures):"
             in text)
     head = "".join(show._head(results, [], []))
     assert words.LOAD_RETRIED_SCALE in head and words.LOAD_RETRIED_SOME in head
@@ -1920,7 +2002,8 @@ def test_a_discard_cut_short_records_each_server_once_as_discarded(tmp_path, whi
     text = (the_runner.dir / "results.md").read_text()
     assert "- launch 3 (A): timed out 1 time, did not run again, then " in text
     # The launch never ran again: nothing says it did, or that its figures come from a second try.
-    assert "(it failed before its second try sent a request, so it has no figures" in text
+    assert "(it failed or was stopped before a second try started GuideLLM, so it has no figures):" in text
+    assert "; its first try's files are its *.try-1.* files" in text  # the discard renamed them, if cut short
     assert "every figure of such a launch" not in text and "none of them" not in text
     head = "".join(show._head(results, [], []))
     assert words.LOAD_RETRIED_NONE_ONE in head and words.LOAD_RETRIED_SCALE not in head

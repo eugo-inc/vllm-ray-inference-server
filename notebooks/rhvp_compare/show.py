@@ -198,7 +198,8 @@ def _head(results: dict | None, found: list[dict], problems: list[str]) -> list[
     if retried:
         parts.append(line((words.RUN_RETRIED_SCALE if scale else words.RUN_RETRIED).format(
             launches=", ".join(retried))))
-    timed_out = [(words.LOAD_RETRIED_RAN if r.get("load_retries") else words.LOAD_RETRIED_NOT).format(
+    timed_out = [(words.LOAD_RETRIED_RAN if r.get("load_retries") else words.LOAD_RETRIED_NOT_KEPT
+                  if summary.first_try_kept(r) else words.LOAD_RETRIED_NOT).format(
         index=r["index"], side=r["side"], code=r.get("error_code") or r.get("status")) for r in launches
         if r.get("load_timeouts")]
     if timed_out:
@@ -464,6 +465,8 @@ def scale_out(run: str | None = None) -> None:
         fit = summary.surge_rate_fit(results)
         if fit:
             parts.append(draw.notice(words.SCALE_RATE_NOTES[fit]))
+        for capped in summary.surge_capped(results):
+            parts.append(draw.notice(words.SCALE_RATE_ONE_SIDE.format(**capped)))
         if any((rows.get(c) or {}).get("role") == "secondary" for c in ids):
             parts.append(line(words.SECONDARY_NOTE))
         stepped = {side: [r for r in _scored(results, side) if (r.get("scale") or {}).get("new_replica")]
