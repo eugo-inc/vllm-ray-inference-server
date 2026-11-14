@@ -985,7 +985,30 @@ def test_a_twins_zero_gives_its_floor_group_no_verdict_and_is_shown_in_the_noteb
     assert "has a figure of 0 (its twin in round 2)" in (the_runner.dir / "results.md").read_text()
     head = "".join(show._head(results, [], []))
     assert "comparison with its twin gives no ratio" in head
-    assert "twin on c4/output_tokens_per_s in round 2 (no verdict for c" in head
+    assert "twin on c4/output_tokens_per_s in round 2 (no verdict for c4/output_tokens_per_s: a figure of 0)" in head
+
+
+def test_the_notebook_names_the_reason_a_twins_zero_gives_its_cases(tmp_path):
+    # Launch 7 is B~same in round 2, at 0 at 4 streams. On two nodes, or with launch 3 (B, round 1) failed on its own
+    # account, a reason checked before the 0 applies; the notebook names that one, as the table and the notes do.
+    for name, backend, reason in (
+            ("nodes", FakeBackend(zero={7: 4}, nodes=("node-1", "node-2")), "more_than_one_node"),
+            ("failed", FakeBackend(zero={7: 4}, fail_launch=3), "side_failed")):
+        results, _, _ = run(tmp_path / name, backend, rounds={"count": 2, "warmup": False})
+        rows = rows_of(results)
+        zeros = results["analysis"]["nonpositive_twins"]
+        assert zeros and {rows[c]["reason"] for t in zeros for c in t["cases"]} == {reason}
+        head = "".join(show._head(results, [], []))
+        assert f"(no verdict for c4/output_tokens_per_s: {words.REASON_TEXT[reason]})" in head
+        assert "(no verdict for c4/output_tokens_per_s: a figure of 0)" not in head
+    # The cases of one 0 that got different reasons: none is named, as in the notes. This plan's floor groups are one
+    # case each, so the test puts a case with another reason into the 0's group.
+    results, _, _ = run(tmp_path / "mixed", FakeBackend(zero={7: 4}), rounds={"count": 2, "warmup": False})
+    assert rows_of(results)["c1/output_tokens_per_s"]["reason"] != "nonpositive_value"
+    [entry] = [t for t in results["analysis"]["nonpositive_twins"] if t["case"] == "c4/output_tokens_per_s"]
+    entry["cases"].append("c1/output_tokens_per_s")
+    head = "".join(show._head(results, [], []))
+    assert "(no verdict for c4/output_tokens_per_s, c1/output_tokens_per_s)" in head
 
 
 def test_a_twin_at_0_in_every_round_is_named_and_its_group_gets_no_verdict(tmp_path):

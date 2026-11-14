@@ -126,8 +126,10 @@ TWIN_DIFFERS = ("A side leaned the same way against its twin in more rounds than
                 "with that many, one this low can turn up by chance.")
 TWIN_DIFFERS_CASE = "side {side} on {case} (p = {p})"
 TWIN_ZERO = ("A figure of 0 in a side's comparison with its twin gives no ratio: that side has no noise floor there, "
-             "and every case whose floor uses it has NO VERDICT (a figure of 0): {cases}.")
-TWIN_ZERO_CASE = "{who} on {case} in {rounds} (no verdict for {affected})"
+             "and every case whose floor uses it has NO VERDICT: {cases}.")
+TWIN_ZERO_CASE = "{who} on {case} in {rounds} (no verdict for {affected}{reason})"
+#: The reason those cases got, when they all got the same one (another reason can come before the 0); none otherwise.
+TWIN_ZERO_REASON = ": {reason}"
 ROUND_ONE = "round {n}"
 ROUND_MANY = "rounds {n}"
 TWIN_ZERO_SIDE = "side {side}"

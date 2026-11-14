@@ -1334,7 +1334,7 @@
         },
         "values": {
           "type": "object",
-          "description": "The launch's figure for each case id in plan.cases that it measured. A 0, such as 0 output tokens per second, gives no ratio: that case gets NO VERDICT (nonpositive_value), and on a side or its twin so does every case whose floor uses that comparison (analysis.nonpositive_twins). The analysis reads only this map.",
+          "description": "The launch's figure for each case id in plan.cases that it measured. A 0, such as 0 output tokens per second, gives no ratio. On side A or B, in any round, it gives that case NO VERDICT (nonpositive_value, unless a reason the analysis checks first applies). In a round where a side and its twin both have a figure, a 0 on either leaves that side with no noise floor, so every case whose floor uses that comparison gets NO VERDICT as well (analysis.nonpositive_twins); a twin's 0 in a round where its side has no figure is neither graded nor named. The analysis reads only this map.",
           "additionalProperties": {
             "type": "number",
             "minimum": 0
