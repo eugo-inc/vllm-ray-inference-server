@@ -848,6 +848,8 @@ def test_engine_flags_with_part_of_vllms_types_leave_unknown_names_to_ray():
     (["--no-enable-prefix-caching=false"], "takes no value"),
     (["--port", "9000"], "this server listens where llm.yaml says"),
     (["--host=0.0.0.0"], "this server listens where llm.yaml says"),
+    (["--uvicorn-log-level", "warning"], "uvicorn_log_level is a setting of vLLM's own web server"),
+    (["--ssl-keyfile", "k.pem"], "ssl_keyfile is a setting of vLLM's own web server"),
 ])
 def test_engine_flags_it_cannot_map_are_refused(argv, words):
     for types in (None, FAKE_VLLM_TYPES):

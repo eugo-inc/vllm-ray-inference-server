@@ -157,6 +157,10 @@ TEXT_ENGINE_KWARGS = ("revision", "tokenizer_revision", "code_revision")
 # Where vLLM's own web server listens. Ray Serve listens at llm.yaml's http_host and http_port instead, and Ray Serve
 # LLM does not read these, so they are refused rather than taken without effect.
 SERVER_ONLY_FLAGS = ("host", "port", "uds")
+# Settings of the uvicorn server that vLLM's own launcher starts. Ray Serve serves the app here instead, and Ray Serve
+# LLM 2.60.0 does not read these (vLLM's init_app_state, which it calls, reads none of them), so they are refused too.
+WEB_SERVER_FLAGS = ("ssl_keyfile", "ssl_certfile", "ssl_ca_certs", "ssl_cert_reqs", "ssl_ciphers",
+                    "enable_ssl_refresh", "uvicorn_log_level", "disable_uvicorn_access_log")
 # vLLM's alias pairs: --disable-x for --enable-x false, and the other way round (vLLM 0.33; 0.29 has no aliases).
 _INVERSE_PREFIXES = (("disable_", "enable_"), ("enable_", "disable_"))
 ENGINE_FLAGS_HELP = (
@@ -166,8 +170,8 @@ ENGINE_FLAGS_HELP = (
     "and --no-name for false. A value that starts with '-' and is not a number needs --name=value. Each name is "
     "checked against the vLLM engine and OpenAI server arguments of this image before Ray starts. Refused (exit 2): "
     "short flags (-x), dotted names (--a.b), a name this vLLM does not have, a flag given twice, a value for a "
-    "boolean, a flag with no value that is not a boolean, --host, --port and --uds, and a value with no flag "
-    "before it."
+    "boolean, a flag with no value that is not a boolean, --host, --port and --uds, the TLS and uvicorn settings of "
+    "vLLM's own web server, and a value with no flag before it."
 )
 
 
@@ -279,6 +283,11 @@ def engine_flags(
             raise ConfigError(
                 f"engine flag {token!r}: this server listens where llm.yaml says (http_host, http_port); Ray Serve "
                 f"LLM does not read {key}"
+            )
+        if key in WEB_SERVER_FLAGS:
+            raise ConfigError(
+                f"engine flag {token!r}: {key} is a setting of vLLM's own web server, which this server does not run "
+                f"(Ray Serve serves the app); Ray Serve LLM does not read it"
             )
         declared = None if types is None else types.get(key)
         if types is not None and declared is None and complete:

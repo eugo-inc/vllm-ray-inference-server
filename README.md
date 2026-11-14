@@ -429,8 +429,9 @@ oc annotate scaledobject/ray-serve-llm -n vllm-inference autoscaling.keda.sh/pau
      Ray starts, and refuses to start (exit 2) on a flag it cannot turn into a setting: a name that vLLM does not
      have, a flag with no value that is not a boolean, a value for a boolean, a short flag such as `-tp`, a dotted
      name, a flag given twice, a value with no flag before it, `--model` and `--served-model-name` (the model comes
-     from `global.model`), and `--host`, `--port` and `--uds` (the port comes from the comparison). `--config` and
-     `--print-config` are the server's own options, not vLLM's;
+     from `global.model`), `--host`, `--port` and `--uds` (the port comes from the comparison), and the TLS and
+     uvicorn settings of vLLM's own web server, which this server does not run. `--config` and `--print-config` are
+     the server's own options, not vLLM's;
    - check `runName`, `rounds` (`count`, `warmup`, `twins`), `load` and `analysis` (`alpha`, `primary`). The
      comments there explain each setting.
 3. Commit and push. Argo CD creates the Job `compare-<runName>-<hash>` in `vllm-notebook`. We expect the `notebook`

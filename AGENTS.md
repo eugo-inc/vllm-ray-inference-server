@@ -140,10 +140,13 @@ edit them by hand; `patternizer upgrade` rewrites them. You may add targets to `
    `ray.llm._internal.serve.engines.vllm.vllm_models`; `ray.serve.llm` imports them anyway), and checks each flag
    against their declared types: a name neither has, a flag with no value that is not a boolean and a value for a
    boolean are refused; vLLM's `--disable-x` / `--enable-x` aliases map to their pair. Refused by form: a short
-   flag, a dotted name, a flag given twice, a `--no-` flag with a value, a bare value, and `--host`, `--port` and
-   `--uds` (Ray Serve listens at `http_host` and `http_port`; Ray Serve LLM does not read them). All are exit 2 with
-   a message that names the flag; no flag is dropped. Where those classes cannot be imported (the unit tests) only
-   the form is checked, with a warning.
+   flag, a dotted name, a flag given twice, a `--no-` flag with a value, a bare value, `--host`, `--port` and
+   `--uds` (Ray Serve listens at `http_host` and `http_port`; Ray Serve LLM does not read them), and the TLS and
+   uvicorn settings of vLLM's own web server (`serve_app.WEB_SERVER_FLAGS`; Ray Serve serves the app, and vLLM's
+   `init_app_state`, which Ray Serve LLM calls, reads none of them). All are exit 2 with a message that names the
+   flag, and `serve_app.py` drops no flag; Ray Serve LLM hands the other OpenAI server settings to vLLM's
+   `init_app_state`. Where those classes cannot be imported (the unit tests) only the form is checked, with a
+   warning.
 3. It starts Ray with a 2 GiB object store and its Prometheus metrics on port 8080 (`metrics_port`), checks that
    Ray sees enough GPUs for `max_replicas` replicas (exit 2 when it does not and `max_replicas` is above 1), starts
    Serve on `0.0.0.0:8000`, and runs the Ray Serve LLM app `llm`. `serve.run` returns once the app is RUNNING,
