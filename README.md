@@ -61,6 +61,7 @@ no OpenShift AI subscription.
 - [The notebook](#the-notebook)
 - [Compare two images](#compare-two-images)
 - [Scale out](#scale-out)
+- [Partner results: Eugo](#partner-results-eugo)
 - [Changing the model](#changing-the-model)
 - [Uninstall](#uninstall)
 - [Support](#support)
@@ -976,6 +977,32 @@ and twin and gets NO VERDICT (`zero_floor`): the run checks the harness, not a r
 - No run has used MIG devices. That `nvidia-smi`'s GPU query lists the parent GPU's UUID in a container given a MIG
   device, and that `nvidia-smi -L` lists the MIG device's own UUID under it, is from NVIDIA's documented output, not
   from a run here.
+
+## Partner results: Eugo
+
+vLLM servers on Eugo's image start sooner, and start first time.
+
+*Eugo's next vLLM image (release pending) against the upstream `vllm/vllm-openai` v0.33.0 image (arm64). Measured by
+Eugo on one NVIDIA DGX Spark shared with other jobs, with plain `vllm serve` containers (not yet through this
+pattern's Ray Serve LLM server), in paired rounds with an exact sign test. Your hardware, model and settings will
+change the numbers.*
+
+### Time for a new server to serve
+
+Qwen2.5-0.5B-Instruct, from container start to the first streamed token. Software caches empty
+(`compileCache.mode: none`); model files already in memory and image already on the machine.
+
+| Against upstream vLLM 0.33.0 | Eugo answered first | Eugo sooner by (median) |
+|---|---|---|
+| With `--attention-backend FLASHINFER` | 6 of 6 rounds (p = 0.031) | 20.2 s (22%) |
+
+### Starts that succeed first time
+
+On the same busy machine, vLLM's start-up memory check stopped 4 of 12 upstream starts and 0 of 28 Eugo starts. Eugo's
+vLLM carries a fix that mitigates this.
+
+Not yet measured: this pattern's Ray Serve LLM server, a new node, `compileCache.mode: node` or `shared`, larger
+models, other GPUs. Once the image is released, compare mode's start-up case (`startup/first_answer_s`) can rerun these.
 
 ## Changing the model
 
