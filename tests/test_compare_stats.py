@@ -329,6 +329,20 @@ def test_a_sides_zero_with_no_pair_at_all_still_gives_no_verdict():
     assert got["notes"] == ["side B had a figure of 0 on t in round 3: t gets NO VERDICT (nonpositive_value)"]
 
 
+def test_a_twins_zero_in_a_round_its_side_has_no_figure_is_neither_graded_nor_named():
+    """A~same's 0 in round 3, where side A has no figure (its launch failed for another reason): no comparison of A
+    with its twin carries the 0, so the analysis is the same as with any other figure there."""
+    base = _noisy(10.0, 5.0)
+    without_a3 = [r for r in _rows(base)[0] if not (r["side"] == "A" and r["round"] == 3)]
+    rows, positions = _rows({**base, "A~same": base["A~same"][:2] + [0.0] + base["A~same"][3:]})
+    rows = [r for r in rows if not (r["side"] == "A" and r["round"] == 3)]
+    got = analyze.analyse(rows, positions, TWINS, SECONDARY)
+    assert got == analyze.analyse(without_a3, positions, TWINS, SECONDARY)
+    assert got["nonpositive_twins"] == [] and got["notes"] == []
+    row = got["comparisons"][0]
+    assert (row["outcome"], row["reason"], row["n_rounds"]) == ("better", None, 7)
+
+
 def test_a_sides_own_zero_beside_its_twin_counts_even_without_the_other_side():
     """Side A's 0 in round 3, where side B has no figure (its launch failed for another reason): no pair of B and
     A carries it, but A's comparison with its twin does, so A has no floor and the case has no verdict."""
