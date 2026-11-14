@@ -422,16 +422,21 @@ oc annotate scaledobject/ray-serve-llm -n vllm-inference autoscaling.keda.sh/pau
      vLLM OpenAI server image, `ray-serve-llm` for this pattern's own server image, or `custom` with your own
      `command` and `args`;
    - optionally give a side `args`, added after the preset's own. For `vllm-openai` they are `vllm serve` flags.
-     For `ray-serve-llm` they are vLLM's long-form engine and OpenAI server flags, and each becomes a setting of the
-     vLLM engine: `--attention-backend FLASHINFER` sets `attention_backend`, `--max-num-seqs=64` sets
+     For `ray-serve-llm` they are vLLM engine arguments, by their `vllm serve` flag names, and each becomes a
+     setting of the vLLM engine: `--attention-backend FLASHINFER` sets `attention_backend`, `--max-num-seqs=64` sets
      `max_num_seqs`, `--enforce-eager` sets `enforce_eager` to true and `--no-enable-prefix-caching` sets
-     `enable_prefix_caching` to false. The server checks each name and value against the vLLM in its image before
-     Ray starts, and refuses to start (exit 2) on a flag it cannot turn into a setting: a name that vLLM does not
-     have, a flag with no value that is not a boolean, a value for a boolean, a short flag such as `-tp`, a dotted
-     name, a flag given twice, a value with no flag before it, `--model` and `--served-model-name` (the model comes
-     from `global.model`), `--host`, `--port` and `--uds` (the port comes from the comparison), and the TLS and
-     uvicorn settings of vLLM's own web server, which this server does not run. `--config` and `--print-config` are
-     the server's own options, not vLLM's;
+     `enable_prefix_caching` to false. The syntax is the server's own, not `vllm serve`'s: a list is one JSON list
+     (`--cudagraph-capture-sizes=[1,2,4]`, where `vllm serve` takes `1 2 4`), a mapping is JSON, and `--no-` works
+     for every boolean. Before Ray starts, the server checks each name against the vLLM in its image, and checks the
+     values of booleans, whole numbers, numbers and lists; choices, mappings, config objects and the items of a list
+     go to vLLM as given, and vLLM checks them when the engine starts. The server refuses to start (exit 2) on a
+     flag it cannot turn into a setting: a name that is not a vLLM engine argument (vLLM's OpenAI server settings,
+     such as `--port`, `--api-key` or `--enable-auto-tool-choice`, included), a value of the wrong kind for a
+     boolean, whole number, number or list (`8k` is not a whole number here), the values `None` and empty (which
+     `vllm serve` reads as no value), a short flag such as `-tp`, a dotted name, a flag given twice, a value with no
+     flag before it, `--hf-token` (the server reads the token from `HF_TOKEN`), and `--model` and
+     `--served-model-name` (the model comes from `global.model`). `--config` and `--print-config` are the server's
+     own options, not vLLM's, and `--help` lists these rules;
    - check `runName`, `rounds` (`count`, `warmup`, `twins`), `load` and `analysis` (`alpha`, `primary`). The
      comments there explain each setting.
 3. Commit and push. Argo CD creates the Job `compare-<runName>-<hash>` in `vllm-notebook`. We expect the `notebook`
@@ -696,6 +701,12 @@ it. Output tokens per second, over the whole level, is not timed per token.
   second run started during a run refused (exit 5) and changed nothing, and a runner stopped mid-launch saved the
   run as partial / `STOPPED` and started the stand-in live server again.
 - DCGM's answers are parsed under both the old and the new DCGM exporter metric names, in tests only.
+- No `ray-serve-llm` side has finished a scored launch, with or without `args`. The way the server turns `args`
+  into engine settings was run side by side against `vllm serve`'s own parser for vLLM 0.33.0, on 134 sets of
+  flags: each one the server took gave the setting `vllm serve` gives, apart from the syntax in "Run a comparison"
+  and `--reasoning-parser none`, which `vllm serve` turns into no parser and the server passes on as the text
+  `none`. For vLLM 0.29.0, which this pattern's image pins, only the engine arguments' declared types at that tag
+  were read; nothing was run with it.
 - The length of a run, and so of the server's outage, is an estimate (about 4 to 6 hours for 34 server starts).
 
 ## Scale out

@@ -132,21 +132,22 @@ edit them by hand; `patternizer upgrade` rewrites them. You may add targets to `
    `RHVP_MODEL_ID`, `RHVP_MODEL_SOURCE`, `RHVP_MODEL_REVISION`, `RHVP_GPU_MEMORY_UTILIZATION` and
    `RHVP_MAX_MODEL_LEN`, and then any vLLM engine flags on its command line: every argument other than its own
    `--config`, `--print-config` and `--help` (`serve_app.engine_flags`; the chart passes none, the comparison
-   passes a `ray-serve-llm` side's `args`). Each becomes a key of `engine_kwargs`: `--attention-backend FLASHINFER`
-   is `attention_backend: FLASHINFER`, `--max-num-seqs=64` is `max_num_seqs: 64` (a value is read as JSON when it
-   is JSON, else kept as text; a revision and any text argument stay text), `--enforce-eager` is `true` and
-   `--no-enable-prefix-caching` is `enable_prefix_caching: false`. When flags are given it first imports the two
-   classes Ray Serve LLM sorts `engine_kwargs` by (vLLM's `AsyncEngineArgs` and `FrontendArgs`, through
-   `ray.llm._internal.serve.engines.vllm.vllm_models`; `ray.serve.llm` imports them anyway), and checks each flag
-   against their declared types: a name neither has, a flag with no value that is not a boolean and a value for a
-   boolean are refused; vLLM's `--disable-x` / `--enable-x` aliases map to their pair. Refused by form: a short
-   flag, a dotted name, a flag given twice, a `--no-` flag with a value, a bare value, `--host`, `--port` and
-   `--uds` (Ray Serve listens at `http_host` and `http_port`; Ray Serve LLM does not read them), and the TLS and
-   uvicorn settings of vLLM's own web server (`serve_app.WEB_SERVER_FLAGS`; Ray Serve serves the app, and vLLM's
-   `init_app_state`, which Ray Serve LLM calls, reads none of them). All are exit 2 with a message that names the
-   flag, and `serve_app.py` drops no flag; Ray Serve LLM hands the other OpenAI server settings to vLLM's
-   `init_app_state`. Where those classes cannot be imported (the unit tests) only the form is checked, with a
-   warning.
+   passes a `ray-serve-llm` side's `args`). Each names a field of vLLM's `AsyncEngineArgs`, the class Ray Serve LLM
+   builds the engine from, and becomes a key of `engine_kwargs`: `--attention-backend FLASHINFER` is
+   `attention_backend: FLASHINFER`, `--max-num-seqs=64` is `max_num_seqs: 64`, `--enforce-eager` is `true` and
+   `--no-enable-prefix-caching` is `enable_prefix_caching: false`. The syntax is its own, not `vllm serve`'s parser
+   (`serve_app.ENGINE_FLAGS_HELP`): a list is one JSON list, `--no-` works for every boolean, and a value that is
+   not text is read as JSON when it is JSON. When flags are given it imports that class and checks each name
+   against its fields and each value against the field's declared type (`serve_app.value_kind`): a boolean takes no
+   value; a whole number, a number and a list must be one; text stays text; choices, enums, mappings and config
+   objects go to the engine as given, and vLLM checks them when the engine starts. Refused, each with exit 2 and a
+   message that names the flag: a name that is not a field (vLLM's OpenAI server settings included), a value of the
+   wrong kind, `None` or an empty value (`vllm serve` reads both as no value), a field that takes a boolean or a
+   value, `--hf-token` (the token comes from `HF_TOKEN`), a short flag, a dotted name, a flag given twice, a `--no-`
+   flag with a value and a value with no flag before it; `load_config` then refuses `model` and
+   `served_model_name`, as in `llm.yaml`. No flag is dropped. Where vLLM cannot be imported (the unit tests) only
+   the form is checked, with a warning. The rules were run side by side against `vllm serve`'s own parser for vLLM
+   0.33.0; for vLLM 0.29.0, which this image pins, only the fields' declared types at its tag were read.
 3. It starts Ray with a 2 GiB object store and its Prometheus metrics on port 8080 (`metrics_port`), checks that
    Ray sees enough GPUs for `max_replicas` replicas (exit 2 when it does not and `max_replicas` is above 1), starts
    Serve on `0.0.0.0:8000`, and runs the Ray Serve LLM app `llm`. `serve.run` returns once the app is RUNNING,
@@ -231,13 +232,14 @@ and uses a serving certificate; the Route uses `reencrypt` termination.
   older one is Pending or Running. It then scales Deployment `ray-serve-llm` to 0, and for each launch creates a
   side pod in `vllm-inference` (every one after the first pinned to the first one's node), times its start, runs
   GuideLLM as its own child process, reads GPU power from the Thanos Querier, deletes the pod and saves
-  `results.json`. A side's `args` follow its preset's own: `vllm serve` flags for `vllm-openai`, vLLM's long-form
-  engine and OpenAI server flags for `ray-serve-llm` (`serve_app.engine_flags`, "How the server starts"). GuideLLM
-  starts only after the side has listed the model on `GET /v1/models` and answered a streamed request (`probe`),
-  and its backend carries `validate_backend=false` (`guidellm._backend`, both modes): GuideLLM v0.8.1's own check
-  is `GET <target>/health` by default, and Ray Serve LLM's OpenAI app has no `/health` route, so with the check
-  every load of the pattern's own server failed. In mode `scaleout` GuideLLM goes through the router, whose
-  `/health` only says it has a replica. A round launches A, A~same, B and B~same once each (`plan.launch_order`, rotate-reverse); a twin
+  `results.json`. A side's `args` follow its preset's own: `vllm serve` flags for `vllm-openai`, and vLLM engine
+  arguments in the server's own syntax for `ray-serve-llm` (`serve_app.engine_flags`, "How the server starts").
+  GuideLLM starts only after the side has listed the model on `GET /v1/models` and answered a streamed request
+  (`probe`), and its backend carries `validate_backend=false` (`guidellm._backend`, both modes): GuideLLM v0.8.1's
+  own check is `GET <target>/health` by default, and Ray Serve LLM's OpenAI app has no `/health` route, so with the
+  check every load of the pattern's own server failed. In mode `scaleout` GuideLLM goes through the router, whose
+  `/health` only says it has a replica. A round launches A, A~same, B and B~same once each (`plan.launch_order`,
+  rotate-reverse); a twin
   (`A~same`) launches its side's image and spec under another lineup key, so a backend only names it differently
   (`plan.token`: `A-same` in pod names and labels). A side whose server exits at vLLM's start-up memory check
   (`Error in memory profiling` in its log) is started once more in the same launch (`runner.START_RETRIES`, the
