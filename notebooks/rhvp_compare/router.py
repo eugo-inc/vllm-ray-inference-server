@@ -12,7 +12,8 @@ The runner starts it as a child process in its own container (`spawn`, used by d
 
 - Every path is passed on to the chosen replica, the body streamed back as it comes (server-sent events
   included). Only completion requests (/v1/completions, /v1/chat/completions) are counted.
-- GET /health answers 200 as soon as one replica is set (GuideLLM checks it before the surge).
+- GET /health answers 200 as soon as one replica is set (for a check by hand: the runner turns GuideLLM's own
+  check off, `guidellm._backend`).
 - POST /-/router/backends with {"url": ...} adds a replica; GET /-/router/stats gives the counts: per replica
   `sent`, `finished`, `failed` (an error status or a broken connection), `cancelled` (the client went away, as
   GuideLLM does with the requests still running when the surge ends), `in_flight`, `max_in_flight`, `first_at` and

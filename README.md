@@ -421,6 +421,26 @@ oc annotate scaledobject/ray-serve-llm -n vllm-inference autoscaling.keda.sh/pau
    - set the two `sides`: a `name`, an `image` (pin it by digest), and a `preset`: `vllm-openai` for an upstream
      vLLM OpenAI server image, `ray-serve-llm` for this pattern's own server image, or `custom` with your own
      `command` and `args`;
+   - optionally give a side `args`, added after the preset's own. For `vllm-openai` they are `vllm serve` flags.
+     For `ray-serve-llm` they are vLLM engine arguments, by their `vllm serve` flag names, and each becomes a
+     setting of the vLLM engine: `--attention-backend FLASHINFER` sets `attention_backend`, `--max-num-seqs=64` sets
+     `max_num_seqs`, `--enforce-eager` sets `enforce_eager` to true and `--no-enable-prefix-caching` sets
+     `enable_prefix_caching` to false. The syntax is the server's own, not `vllm serve`'s: a list is one JSON list
+     (`--cudagraph-capture-sizes=[1,2,4]`, where `vllm serve` takes `1 2 4`), a mapping is JSON, and `--no-` works
+     for every boolean. Before Ray starts, the server checks each name against the vLLM in its image, and checks the
+     values of booleans, whole numbers, numbers and lists. Choices, enums, mappings, config objects and the items of
+     a list go to vLLM as given: the server does not check them, and vLLM's own config checks are expected to refuse
+     most bad ones when the engine starts. The server refuses to start (exit 2) on a flag it cannot turn into a
+     setting: a name that is not a vLLM engine argument (vLLM's OpenAI server settings, such as `--port`,
+     `--api-key` or `--enable-auto-tool-choice`, included), a name that is not lower-case words, a flag that needs a
+     value and has none, a value of the wrong kind for a boolean, whole number, number or list (`8k` is not a whole
+     number here), the values `None`, empty and `null` (which read as no value), a short flag such as `-tp`, a
+     dotted name, a flag given twice, a `--no-` flag with a value, a value with no flag before it, `--hf-token` (the
+     server reads the token from `HF_TOKEN`), `--tokens-only` (Ray Serve LLM gives it to vLLM's OpenAI server
+     settings only, not to the engine), `--model` and `--served-model-name` (the model comes from `global.model`),
+     and two settings that Ray Serve LLM itself refuses once Ray has started, `--disable-log-stats` and a
+     `--distributed-executor-backend` other than `ray`. `--config` and `--print-config` are the server's own
+     options, not vLLM's, and `--help` lists these rules;
    - check `runName`, `rounds` (`count`, `warmup`, `twins`), `load` and `analysis` (`alpha`, `primary`). The
      comments there explain each setting.
 3. Commit and push. Argo CD creates the Job `compare-<runName>-<hash>` in `vllm-notebook`. We expect the `notebook`
@@ -473,7 +493,9 @@ launches use the same GPU. The runner then measures:
   loading the weights.
 - **Load.** GuideLLM (pinned, `v0.8.1`) runs one level after another, at 1, 8 and 32 concurrent streams by default,
   with fixed prompt and output lengths and a fixed seed. Per level it records time to first token, inter-token
-  latency and output tokens per second.
+  latency and output tokens per second. It starts only after the side has given its first answer (above), and runs
+  with its own check of the server turned off (`validate_backend=false`): that check asks for `GET /health`, and
+  Ray Serve LLM's OpenAI app, which this pattern's server runs, has no `/health` route.
 - **Energy.** Output tokens per joule at each level, from the GPU's own board power read from DCGM through the
   cluster's monitoring. This is GPU-only power: the rest of the machine is not in it, and the results label it so
   (case ids end in `tokens_per_joule[gpu]`). A level with fewer power samples than `energy.minSamples` (10) gets no
@@ -683,6 +705,16 @@ it. Output tokens per second, over the whole level, is not timed per token.
   second run started during a run refused (exit 5) and changed nothing, and a runner stopped mid-launch saved the
   run as partial / `STOPPED` and started the stand-in live server again.
 - DCGM's answers are parsed under both the old and the new DCGM exporter metric names, in tests only.
+- No `ray-serve-llm` side has finished a scored launch, with or without `args`. The way the server turns `args`
+  into engine settings was run side by side against `vllm serve`'s own parser for vLLM 0.33.0, on 139 sets of
+  flags. Where both took a set, they gave the same setting, apart from the syntax in "Run a comparison",
+  `--reasoning-parser none` (which `vllm serve` turns into no parser and the server passes on as the text `none`)
+  and `--optimization-level 3` (the number 3 here, the text `3` from `vllm serve`; both are the same level once
+  vLLM reads them). The server took four sets that `vllm serve` refuses, all values it does not check:
+  `--compilation-config 3`, an unknown key in `--quantization-config`, a `--kv-transfer-config` that vLLM finds
+  incomplete, and `--cudagraph-capture-sizes=["a"]`. Building vLLM 0.33.0's engine config on CPU refused the first
+  three and accepted the last; no engine was started. For vLLM 0.29.0, which this pattern's image pins, only the
+  engine arguments' declared types at that tag were read; nothing was run with it.
 - The length of a run, and so of the server's outage, is an estimate (about 4 to 6 hours for 34 server starts).
 
 ## Scale out

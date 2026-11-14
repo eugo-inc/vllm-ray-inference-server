@@ -86,8 +86,13 @@ global:
     #                  an image rebuilt under the same tag is not a new run.
     #   custom         set command and args yourself
     # args are added after the preset's own; env adds environment variables.
-    # In both, {model_id}, {model_source}, {model_revision} and {port} are
-    # filled in.
+    # In args and env, {model_id}, {model_source}, {model_revision} and
+    # {port} are filled in. For ray-serve-llm, args are vLLM engine
+    # arguments by their vllm serve names, in the server's own syntax
+    # (--attention-backend FLASHINFER, --max-num-seqs=64, --enforce-eager,
+    # --no-enable-prefix-caching, a list as one JSON list); each becomes an
+    # engine setting, and the server refuses (exit 2) one it cannot map
+    # (README, "Run a comparison").
     sides:
       - name: vllm-0-32-0
         image: docker.io/vllm/vllm-openai:v0.32.0@sha256:befccf0e7e4089aa23926bb6f887a85c0d46c2a99e6de5c5ffdf5cb7957c5b34

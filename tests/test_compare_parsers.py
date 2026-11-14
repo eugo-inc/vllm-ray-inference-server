@@ -80,7 +80,8 @@ def test_command_line():
     args = guidellm.command(_plan(), "http://side:8000", "/results/r/guidellm.json")
     text = " ".join(args)
     assert args[0] == "run"
-    assert "kind=openai_http,target=http://side:8000,model=m,request_format=/v1/completions" in args
+    assert ("kind=openai_http,target=http://side:8000,model=m,request_format=/v1/completions,"
+            "validate_backend=false") in args
     assert "--override profile.streams 1,4" in text
     assert "kind=max_duration,seconds=8" in args
     assert "kind=huggingface_auto,model=org/m,load_kwargs.revision=abc" in args
@@ -1083,6 +1084,17 @@ def test_the_surge_command_runs_a_constant_rate_with_the_latency_goals():
     assert json.loads(one_goal[one_goal.index("--metrics") + 1])["slo"] == {"ttft_ms": 300}
     assert guidellm.command(_plan(), "t", "o")[guidellm.command(_plan(), "t", "o").index("--metrics") + 1] == (
         "kind=generative,sample_size=0")  # mode levels: unchanged
+
+
+def test_guidellm_skips_its_own_health_check_in_both_modes():
+    """GuideLLM v0.8.1's openai_http backend sends GET <target>/health before the load unless validate_backend is
+    false, and Ray Serve LLM's OpenAI app has no /health route; the runner has had a streamed answer first."""
+    for plan, target in ((_plan(), "http://side:8000"), (_scale_plan(), "http://127.0.0.1:8787")):
+        args = guidellm.command(plan, target, "o")
+        backend = args[args.index("--backend") + 1]
+        fields = dict(part.split("=", 1) for part in backend.split(","))
+        assert fields == {"kind": "openai_http", "target": target, "model": "m",
+                          "request_format": plan["load"]["request_format"], "validate_backend": "false"}
 
 
 def test_the_surge_level_from_a_report_with_latency_goals():
