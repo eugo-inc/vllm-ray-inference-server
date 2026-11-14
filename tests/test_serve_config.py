@@ -722,13 +722,16 @@ def test_main_bad_config_exits_2(tmp_path, monkeypatch):
     assert serve_app.main(["--config", str(tmp_path / "missing.yaml")]) == 2
 
 
-# Declared types of a few vLLM engine and OpenAI server arguments, in the shapes dataclasses.fields gives them (types,
+# Declared types of a few vLLM engine arguments, in the shapes dataclasses.fields(AsyncEngineArgs) gives them (types,
 # unions and string annotations), standing in for serve_app.vllm_argument_types() where vLLM is not installed.
 FAKE_VLLM_TYPES = {
-    "attention_backend": "AttentionBackendEnum | None", "max_num_seqs": "int | None", "enforce_eager": bool,
+    "attention_backend": "vllm.v1.attention.backends.registry.AttentionBackendEnum | None",
+    "max_num_seqs": "int | None", "enforce_eager": bool,
     "enable_prefix_caching": "bool | None", "seed": int, "tokenizer": "str | None", "revision": "str | None",
-    "disable_log_stats": bool, "enable_auto_tool_choice": bool, "max_model_len": "int | None",
-    "gpu_memory_utilization": float, "hf_overrides": "dict | None", "tensor_parallel_size": int,
+    "disable_log_stats": bool, "max_model_len": "int | None", "gpu_memory_utilization": float,
+    "hf_overrides": "dict[str, Any] | None", "tensor_parallel_size": int, "compilation_config": "CompilationConfig",
+    "cudagraph_capture_sizes": "list[int] | None", "kv_cache_dtype": "Literal['auto', 'fp8']",
+    "hf_token": "bool | str | None",
 }
 
 
@@ -739,7 +742,7 @@ def no_vllm(monkeypatch):
 
 @pytest.fixture
 def fake_vllm(monkeypatch):
-    monkeypatch.setattr(serve_app, "vllm_argument_types", lambda: (FAKE_VLLM_TYPES, True))
+    monkeypatch.setattr(serve_app, "vllm_argument_types", lambda: FAKE_VLLM_TYPES)
 
 
 def _print_config(tmp_path, monkeypatch, argv):
@@ -789,7 +792,6 @@ def test_engine_flags_among_the_programs_own_become_engine_kwargs(tmp_path, monk
     (["--revision", "1.10", "--tokenizer-revision", "1e3"], {"revision": "1.10", "tokenizer_revision": "1e3"}),
     (["--seed", "NaN", "--x", "Infinity"], {"seed": "NaN", "x": "Infinity"}),  # not JSON numbers: text
     (["--some-flag=-x"], {"some_flag": "-x"}),
-    (["--chat-template", ""], {"chat_template": ""}),
 ])
 def test_engine_flags_by_form(argv, expected):
     assert serve_app.engine_flags(argv) == expected
@@ -801,9 +803,10 @@ def test_engine_flags_by_form(argv, expected):
      {"attention_backend": "FLASHINFER", "max_num_seqs": 64, "enforce_eager": True, "enable_prefix_caching": False,
       "disable_log_stats": True}),
     (["--tokenizer", "123", "--revision", "1.10"], {"tokenizer": "123", "revision": "1.10"}),  # text arguments
-    (["--disable-prefix-caching"], {"enable_prefix_caching": False}),  # vLLM's alias of --no-enable-prefix-caching
-    (["--no-disable-prefix-caching"], {"enable_prefix_caching": True}),
-    (["--enable-auto-tool-choice"], {"enable_auto_tool_choice": True}),  # an OpenAI server argument
+    (["--cudagraph-capture-sizes=[1,2,4]"], {"cudagraph_capture_sizes": [1, 2, 4]}),
+    (["--gpu-memory-utilization", "1", "--seed=-3"], {"gpu_memory_utilization": 1, "seed": -3}),
+    (["--compilation-config", '{"mode": 3}', "--kv-cache-dtype", "fp8"],
+     {"compilation_config": {"mode": 3}, "kv_cache_dtype": "fp8"}),
 ])
 def test_engine_flags_with_vllms_types(argv, expected):
     assert serve_app.engine_flags(argv, FAKE_VLLM_TYPES) == expected
@@ -815,20 +818,29 @@ def test_engine_flags_with_vllms_types(argv, expected):
     (["--no-max-num-seqs"], "'--no-max-num-seqs' needs a value"),
     (["--enforce-eager", "false"], "enforce_eager is a boolean and takes no value"),
     (["--enforce-eager=true"], "enforce_eager is a boolean and takes no value"),
-    (["--atention-backend", "FLASHINFER"], "atention_backend is not a vLLM engine or OpenAI server argument"),
-    (["--print_config"], "print_config is not a vLLM engine or OpenAI server argument"),
-    (["--disable-prefix-caching", "--enable-prefix-caching"], "enable_prefix_caching is given more than once"),
+    (["--atention-backend", "FLASHINFER"], "atention_backend is not a vLLM engine argument"),
+    (["--print_config"], "print_config is not a vLLM engine argument"),
+    (["--port", "9000"], "port is not a vLLM engine argument"),  # vLLM's OpenAI server settings
+    (["--api-key", "k"], "api_key is not a vLLM engine argument"),
+    (["--disable-prefix-caching"], "disable_prefix_caching is not a vLLM engine argument"),  # no aliases
+    (["--max-model-len", "32k"], "max_model_len takes a whole number, got '32k'"),
+    (["--max-num-seqs", "None"], "the value 'None' is not taken"),
+    (["--tokenizer", "None"], "the value 'None' is not taken"),  # vllm serve reads it as no value: not "None"
+    (["--tokenizer", ""], "the value '' is not taken"),
+    (["--revision="], "the value '' is not taken"),
+    (["--max-num-seqs", "null"], "max_num_seqs takes a whole number"),  # vLLM's parser refuses it too
+    (["--seed", "1.5"], "seed takes a whole number"),
+    (["--seed", "NaN"], "seed takes a whole number"),
+    (["--seed", "true"], "seed takes a whole number"),
+    (["--gpu-memory-utilization", "most"], "gpu_memory_utilization takes a number"),
+    (["--cudagraph-capture-sizes", "8"], "cudagraph_capture_sizes takes a list, given as one JSON list"),
+    (["--cudagraph-capture-sizes", "1", "2"], "cudagraph_capture_sizes takes a list, given as one JSON list"),
+    (["--hf-token"], "HF_TOKEN variable"),
+    (["--hf-token", "hf_x"], "HF_TOKEN variable"),
 ])
 def test_engine_flags_vllms_types_refuse(argv, words):
     with pytest.raises(serve_app.ConfigError, match=re.escape(words)):
         serve_app.engine_flags(argv, FAKE_VLLM_TYPES)
-
-
-def test_engine_flags_with_part_of_vllms_types_leave_unknown_names_to_ray():
-    assert serve_app.engine_flags(["--atention-backend", "X"], FAKE_VLLM_TYPES, complete=False) == {
-        "atention_backend": "X"}
-    with pytest.raises(serve_app.ConfigError, match="needs a value"):
-        serve_app.engine_flags(["--max-num-seqs"], FAKE_VLLM_TYPES, complete=False)
 
 
 @pytest.mark.parametrize("argv, words", [
@@ -846,15 +858,38 @@ def test_engine_flags_with_part_of_vllms_types_leave_unknown_names_to_ray():
     (["--enable-prefix-caching", "--no-enable-prefix-caching"], "enable_prefix_caching is given more than once"),
     (["--no-enable-prefix-caching", "true"], "takes no value"),
     (["--no-enable-prefix-caching=false"], "takes no value"),
-    (["--port", "9000"], "this server listens where llm.yaml says"),
-    (["--host=0.0.0.0"], "this server listens where llm.yaml says"),
-    (["--uvicorn-log-level", "warning"], "uvicorn_log_level is a setting of vLLM's own web server"),
-    (["--ssl-keyfile", "k.pem"], "ssl_keyfile is a setting of vLLM's own web server"),
+    (["--hf-token", "hf_x"], "HF_TOKEN variable"),
+    (["--tokenizer", "None"], "the value 'None' is not taken"),
+    (["--revision", ""], "the value '' is not taken"),
 ])
 def test_engine_flags_it_cannot_map_are_refused(argv, words):
     for types in (None, FAKE_VLLM_TYPES):
         with pytest.raises(serve_app.ConfigError, match=re.escape(words)):
             serve_app.engine_flags(argv, types)
+
+
+# Declared-type shapes of vLLM's AsyncEngineArgs fields (as dataclasses.fields gives them in vLLM 0.33.0, and as
+# written at tag v0.29.0) and the kind of value each takes here.
+@pytest.mark.parametrize("declared, kind", [
+    (bool, "bool"), ("bool", "bool"), ("bool | None", "bool"), ("Optional[bool]", "bool"),
+    ("typing.Optional[bool]", "bool"), (bool | None, "bool"),
+    (int, "int"), ("int | None", "int"), (int | None, "int"), ("Optional[int]", "int"),
+    (float, "number"), ("float | None", "number"),
+    (str, "text"), ("str | None", "text"), (str | None, "text"),
+    ("list[str]", "list"), ("list[str] | None", "list"), ("list[int] | None", "list"), ("set[str]", "list"),
+    ("list[int | str] | None", "list"), ("list[Literal['model', 'worker', 'all']] | None", "list"),
+    (list[int] | None, "list"),
+    ("bool | str | None", "mixed"),
+    ("dict[str, Any] | None", "other"), ("dict", "other"), ("Literal['auto', 'half', 'float16']", "other"),
+    ("Union[Literal['auto', 'fp8'], str]", "other"), ("Optional[Literal['lazy', 'eager']]", "other"),
+    ("vllm.v1.attention.backends.registry.AttentionBackendEnum | None", "other"),
+    ("vllm.v1.attention.backends.registry.AttentionBackendEnum | str | None", "other"),
+    ("str | list[str] | None", "list"), ("str|list[str]", "list"), ("Optional[Union[str,list[str]]]", "list"),
+    ("dict[str,list[float]]|None", "other"), ("str | torch.dtype | None", "other"), ("CompilationConfig", "other"),
+    ("Literal[1, 8, 16, 32]", "other"), ("Union[str, Literal['ray', 'mp'], type[Any], NoneType]", "other"),
+])
+def test_value_kind(declared, kind):
+    assert serve_app.value_kind(declared) == kind
 
 
 @pytest.mark.parametrize("vllm, argv, words", [
@@ -869,7 +904,8 @@ def test_engine_flags_it_cannot_map_are_refused(argv, words):
     ("no_vllm", ["--seed", "1", "--seed", "2"], "seed is given more than once"),
     ("no_vllm", ["--", "--seed", "1"], "lower-case words"),
     ("fake_vllm", ["--max-num-seqs", "--enforce-eager"], "needs a value"),
-    ("fake_vllm", ["--atention-backend", "FLASHINFER"], "is not a vLLM engine or OpenAI server argument"),
+    ("fake_vllm", ["--atention-backend", "FLASHINFER"], "is not a vLLM engine argument"),
+    ("fake_vllm", ["--max-model-len", "32k"], "takes a whole number"),
 ])
 def test_bad_or_forbidden_engine_flags_exit_2(tmp_path, monkeypatch, capsys, caplog, request, vllm, argv, words):
     request.getfixturevalue(vllm)
@@ -913,16 +949,8 @@ def test_an_abbreviated_own_option_is_an_engine_flag(tmp_path):
 def test_help_is_only_the_long_option(capsys):
     with pytest.raises(SystemExit) as stop:
         serve_app._parse_args(["--help"])
-    assert stop.value.code == 0 and "is a vLLM engine flag" in " ".join(capsys.readouterr().out.split())
+    assert stop.value.code == 0 and "is a vLLM engine argument" in " ".join(capsys.readouterr().out.split())
     assert serve_app._parse_args(["-h"]).engine_flags == ["-h"]
-
-
-def test_vllm_type_names():
-    assert all(serve_app._is_bool_type(t) for t in (bool, "bool", "bool | None", "Optional[bool]",
-                                                    "typing.Optional[bool]", bool | None))
-    assert not any(serve_app._is_bool_type(t) for t in (int, "int | None", "bool | str", "Literal['auto']"))
-    assert all(serve_app._is_text_type(t) for t in (str, "str | None", str | None))
-    assert not serve_app._is_text_type("str | int")
 
 
 def test_rhvp_status_exit_codes_and_output(monkeypatch, capsys):
