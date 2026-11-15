@@ -83,7 +83,8 @@ clusterGroup:
       # three steps in AGENTS.md, Troubleshooting (oc set image, then prune the
       # build objects the chart no longer renders).
       # A list: overrides/values-scaleout-keda.yaml restates these rules and adds
-      # one for the autoscaler's pause; keep the two in step.
+      # two, for the autoscaler's pause and the metrics token's data; keep the two
+      # files in step.
       ignoreDifferences:
         - group: apps
           kind: Deployment

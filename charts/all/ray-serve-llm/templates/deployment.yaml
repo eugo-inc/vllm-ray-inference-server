@@ -102,7 +102,9 @@ spec:
               value: /tmp/r
             {{- if eq (toString (.Values.global.scaleOut | default dict).mode) "keda" }}
             # Ray's cluster token, the one the ServiceMonitor scrapes the metrics port with
-            # (metrics-token.yaml). Ray reads it once, when it starts.
+            # (metrics-token.yaml). Every Ray process reads the file when that process
+            # starts: the head, each worker added later, and a process that attaches
+            # (rhvp_status.py). The subPath mount below keeps it fixed for the container.
             - name: RAY_AUTH_TOKEN_PATH
               value: /etc/ray-auth/token
             {{- end }}
@@ -164,8 +166,14 @@ spec:
             - name: dshm
               mountPath: /dev/shm
             {{- if eq (toString (.Values.global.scaleOut | default dict).mode) "keda" }}
+            # subPath: Kubernetes does not update a subPath file in a running container,
+            # so a worker or an attaching process started after a change to the Secret
+            # still reads the token the head started with. A mount without it is
+            # rewritten in place, and the running Ray cluster then refuses each Ray
+            # process that starts with the new token, on Ray 2.60.0 too.
             - name: ray-auth
-              mountPath: /etc/ray-auth
+              mountPath: /etc/ray-auth/token
+              subPath: token
               readOnly: true
             {{- end }}
       volumes:

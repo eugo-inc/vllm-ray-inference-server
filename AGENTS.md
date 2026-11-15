@@ -66,7 +66,7 @@ one, change it everywhere and run the tests.
 | Compile cache volume | PVC `ray-serve-llm-compile-cache` at `/cache` while `compileCache.mode` is `node` (ReadWriteOnce) or `shared` (ReadWriteMany); `none` keeps the emptyDir |
 | Autoscaler install (keda mode) | namespace `openshift-keda` (OperatorGroup for all namespaces, labelled `openshift.io/cluster-monitoring: "true"`), Subscription key `keda` for package `openshift-custom-metrics-autoscaler-operator` (channel `stable`), app `keda-config` (`charts/all/keda-config`) with KedaController `keda`; all in `overrides/values-scaleout-keda.yaml`, which `sharedValueFiles` includes as `/overrides/values-scaleout-<global.scaleOut.mode>.yaml` |
 | Autoscaler objects (keda mode) | in `vllm-inference`: ScaledObject `ray-serve-llm` (on Deployment `ray-serve-llm`), TriggerAuthentication `keda-trigger-auth-prometheus`, ServiceAccount `thanos`, Roles and RoleBindings `thanos-metrics-reader` and `keda-operator-token-creator` (for ServiceAccount `openshift-keda/keda-operator`), ServiceMonitor `ray-serve-llm` (port `metrics`, bearer token from Secret `ray-serve-llm-metrics-token`, key `token`) |
-| Metrics token (keda mode) | Secret `ray-serve-llm-metrics-token`, key `token` (`templates/metrics-token.yaml`): Ray's cluster token, mounted read-only in the server container at `/etc/ray-auth/token` (volume `ray-auth`, named by `RAY_AUTH_TOKEN_PATH`) and sent by ServiceMonitor `ray-serve-llm`; Argo CD ignores its `/data/token` (`overrides/values-scaleout-keda.yaml`) |
+| Metrics token (keda mode) | Secret `ray-serve-llm-metrics-token`, key `token` (`templates/metrics-token.yaml`): Ray's cluster token, mounted read-only in the server container at `/etc/ray-auth/token` (volume `ray-auth`, `subPath: token`, named by `RAY_AUTH_TOKEN_PATH`) and sent by ServiceMonitor `ray-serve-llm`; Argo CD ignores its `/data/token` (`overrides/values-scaleout-keda.yaml`) |
 | Autoscaler pause | annotation `autoscaling.keda.sh/paused-replicas: "0"` on ScaledObject `ray-serve-llm`, set by the comparison's runner (env `RHVP_COMPARE_SERVER_SCALED_OBJECT`, from `compare.serverScaledObject` in the notebook chart) and ignored by Argo CD (`overrides/values-scaleout-keda.yaml`) |
 | GPU time-slicing | ConfigMap `time-slicing-config` (key `any`) in `nvidia-gpu-operator`, named by the ClusterPolicy's `devicePlugin.config` only while `timeSlicing.enabled` is true |
 | Comparison with docker, scale-out mode | second replica container `<first replica's name>-2` (a twin's: `rhvp-cmp-<id>-<NN>-a-same-2`); warm compile-cache volumes `<CACHE_VOLUME>-<last 8 characters of the run id>-<a or b>`; per scored launch `server-2.log` (artifact `server_log_2`) and `router.log`; env `RHVP_COMPARE_REPLICA_GPUS`, `RHVP_COMPARE_CPUSET`, `RHVP_COMPARE_CACHE_VOLUME` (from `REPLICA_GPUS`, `CPUSET`, `CACHE_VOLUME` in `scripts/compare-local.sh`); helper containers `rhvp-cmp-<last 8 characters of the run id>-gpu-probe-<1 or 2>` and `...-gpu-mig-<1 or 2>` (nvidia-smi, before the first launch); server-record fields `gpus` and `gpu_uuids` (in each launch's `servers`, `$defs/server`) |
@@ -223,10 +223,13 @@ Server container environment:
 - `/dev/shm`: an emptyDir with `medium: Memory`, 4Gi.
 - `HF_TOKEN`: from `secretKeyRef` `huggingface-secret` / `hftoken`, `optional: true`.
 - `RAY_AUTH_TOKEN_PATH=/etc/ray-auth/token`, in keda mode only: Ray's cluster token, from Secret
-  `ray-serve-llm-metrics-token` mounted read-only at `/etc/ray-auth` (volume `ray-auth`, not optional), the token the
-  ServiceMonitor scrapes the metrics port with. Ray reads it when it starts. In every other mode the chart leaves the
-  image's own Ray token setup alone. The chart sets neither `RAY_AUTH_TOKEN` (Ray reads it before the path) nor
-  `RAY_AUTH_MODE`.
+  `ray-serve-llm-metrics-token` key `token`, mounted read-only at that path with `subPath: token` (volume `ray-auth`,
+  not optional), the token the ServiceMonitor scrapes the metrics port with. Every Ray process reads the file when that
+  process starts: the head, each worker process added later, and a process that attaches (`rhvp_status.py`). Keep
+  the `subPath`: Kubernetes rewrites a Secret volume's files in a running container when the Secret changes, but not a
+  `subPath` file, and a Ray process that starts with a token other than the running cluster's is refused. In every
+  other mode the chart leaves the image's own Ray token setup alone. The chart sets neither `RAY_AUTH_TOKEN` (Ray
+  reads it before the path) nor `RAY_AUTH_MODE`.
 
 Notebook environment (set by the chart, read by `rhvp_bench`):
 
@@ -403,13 +406,16 @@ Three parts, each off by default. With every default, the local charts render ex
   the file as its cluster token. The chart generates the token with `randAlphaNum 64` on every render; the keda
   override's ignore rule on `/data/token` keeps the value Argo CD first created, as the notebook app's rule does for
   `notebook-proxy`. Nothing else in the chart may carry the value or a checksum of it, or the server would roll on
-  every sync (`tests/test_charts.py` checks the render). Prerequisites: monitoring for user-defined projects enabled
-  on the cluster, and a second GPU (another GPU node, or `timeSlicing.enabled` in
-  `charts/all/nvidia-gpu-config/values.yaml`, with `gpu_memory_utilization` lowered to leave room for the other pod;
-  nothing checks that). Time-slicing covers every GPU node and namespace, while the comparison's `kube.gpu_free` looks
-  only at `vllm-inference`: a GPU pod from another namespace can then share a timed GPU unseen, so the docs say to
-  turn it off before a comparison. Server pods on more than one node need `modelStorage.accessMode: ReadWriteMany` and
-  `compileCache.mode: shared`; a PVC's access mode cannot change after it is created.
+  every sync (`tests/test_charts.py` checks the render). When the value does change (an edit, the Secret deleted and
+  created again, or the landing order under "Not checked yet"), the running server pods keep the old token through
+  their `subPath` mount while the scrape sends the new one, so the docs say to delete the server pods after any
+  change. Prerequisites: monitoring for user-defined projects enabled on the cluster, and a second GPU (another GPU
+  node, or `timeSlicing.enabled` in `charts/all/nvidia-gpu-config/values.yaml`, with `gpu_memory_utilization` lowered
+  to leave room for the other pod; nothing checks that). Time-slicing covers every GPU node and namespace, while the
+  comparison's `kube.gpu_free` looks only at `vllm-inference`: a GPU pod from another namespace can then share a timed
+  GPU unseen, so the docs say to turn it off before a comparison. Server pods on more than one node need
+  `modelStorage.accessMode: ReadWriteMany` and `compileCache.mode: shared`; a PVC's access mode cannot change after it
+  is created.
 - **The comparison's mode `scaleout`** (`global.compare.mode`): docker only for now (`kube.py` refuses it with
   `PLAN_INVALID`). `scaleOut.sharedGpu` only sets the memory default and the 0.475 refusal; the docker backend places
   the replicas from `RHVP_COMPARE_REPLICA_GPUS` (else `RHVP_COMPARE_GPUS`) and refuses, as `PLAN_INVALID` before
@@ -479,7 +485,14 @@ checks the token on that endpoint answered 401 with no token and 403 with a wron
 them with Ray's OpenTelemetry metrics path turned on), loaded the file's token, and answered 200 to 23 of the 24
 scrapes with it; the other, the only such scrape of the first run, answered 500, and that run kept no detail of it.
 With the path set and no file, both builds stopped in `ray.init` (`AuthenticationError`), which is why the chart's
-mount is not optional.
+mount is not optional. A review of the first version of the chart, which mounted the Secret as a directory, replaced
+the token file in place under a running head (as the kubelet does to such a volume after the Secret changes), on CPU,
+on Ray 2.60.0 and on the 2.61 development build. Before the swap, a second process attached with
+`ray.init(address="auto")` and a new worker process came up in about 1 s. After it, an actor that was already running
+still answered, but the attach failed (`ConnectionError` on 2.60.0, which `rhvp_status.py` reports as
+`NO_CONTROLLER`; `AuthenticationError` on 2.61), new worker processes did not register within 40 to 60 s, and the
+raylet logged `InvalidAuthToken`; the metrics port on 2.60.0 still answered 200. Putting the old file back made both
+work again. That is why the chart now mounts the file with `subPath`.
 
 Not checked yet:
 
@@ -500,7 +513,9 @@ Not checked yet:
   `ray-serve-llm-metrics-token` and sends it, that Argo CD keeps its first value, and the order in which the ignore
   rule (in the clustergroup app) and the Secret (in the ray-serve-llm app) land when keda mode is turned on in a
   running install. A second sync of the server's app before its rule arrives would replace the token; deleting the
-  server pods then brings both sides back to one token. Nor a Serve app running on a Ray build that checks the token.
+  server pods then brings both sides back to one token. Nor that a running pod keeps its token file when the Secret
+  changes: that a `subPath` file is not updated is from Kubernetes' documentation, not from a run (the `subPath`
+  mount itself has not run anywhere). Nor a Serve app running on a Ray build that checks the token.
 - No server pod has been seen exporting `ray_vllm_num_requests_waiting` under that name; KEDA reads an empty answer
   as 0, so a wrong name means the server never scales, without an error.
 - `compileCache.mode` `node` and `shared`, and `fsGroupChangePolicy: OnRootMismatch`, on OpenShift.

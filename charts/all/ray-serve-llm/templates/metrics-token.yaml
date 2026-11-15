@@ -12,8 +12,13 @@
 # not replace it, as the notebook app does for its cookie secret. Helm's lookup
 # could not keep it: Argo CD renders the chart without access to the cluster,
 # where lookup finds nothing. The value changes on every render, so nothing else
-# may carry it or a checksum of it, or the server would roll on every sync. Ray
-# reads the token only when it starts: after changing it, delete the server pods.
+# may carry it or a checksum of it, or the server would roll on every sync.
+#
+# Every Ray process in the server reads the file when that process starts, and the
+# Deployment mounts it with subPath, so a running server keeps the token it started
+# with. The cluster's monitoring reads the Secret itself, so after the value changes
+# the scrape moves to the new token while the pods keep the old one, and a Ray build
+# that checks the token refuses it: delete the server pods right after any change.
 apiVersion: v1
 kind: Secret
 metadata:

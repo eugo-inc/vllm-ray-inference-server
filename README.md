@@ -869,12 +869,27 @@ The scrape carries a token. In keda mode the server starts Ray with the token in
 as `Authorization: Bearer <token>`. A Ray build with token authentication on for its metrics endpoint refuses a scrape
 without it (401): Prometheus would store nothing, and the server would never scale out. The pattern's Ray release
 does not check a token on that port; it uses this one as the token of the Ray cluster it starts, in place of one it
-would make itself. The chart makes the token, 64 random letters and digits, when Argo CD first creates the Secret, and
-Argo CD keeps that value on later syncs. It is the token of the whole Ray cluster in each server pod, not a token for
-metrics only, and the cluster's monitoring keeps a copy in its scrape configuration. Ray reads it only when it starts.
-To change it, put a new value in the Secret's `token` key, then delete the server pods
-(`oc delete pod -l app.kubernetes.io/name=ray-serve-llm -n vllm-inference`); until they restart, a Ray build that
-checks the token refuses the scrape (403). If the Secret is missing, a new server pod waits for it and does not start.
+would make itself. It is the token of the whole Ray cluster in each server pod, not a token for metrics only, and the
+cluster's monitoring keeps a copy in its scrape configuration. If the Secret is missing, a new server pod waits for it
+and does not start.
+
+Every Ray process in a server pod reads the token file when that process starts: the Ray head, each worker process
+Ray adds later, and a process that attaches, such as `rhvp_status.py`. The chart mounts the file with `subPath`, which
+Kubernetes does not update in a running container, so all of them keep the token the pod started with. The cluster's
+monitoring reads the Secret itself, so when the Secret's value changes, the scrape sends the new token while the
+running pods keep the old one, and a Ray build that checks the token refuses the scrape (403) until the pods are
+replaced. On the pattern's Ray release nothing shows, but delete the server pods after every change all the same:
+
+```sh
+oc delete pod -l app.kubernetes.io/name=ray-serve-llm -n vllm-inference
+```
+
+The chart makes the token, 64 random letters and digits, when Argo CD first creates the Secret, and an ignore rule on
+the server's app keeps that value on later syncs. To change it, put a new value in the Secret's `token` key, then
+delete the server pods. The value can also change on its own once: the ignore rule comes with the clustergroup app and
+the Secret with the server's app, and when keda mode is turned on in a running install, a second sync of the server's
+app before its rule arrives replaces the token. If the metric stays missing after you turn keda mode on, delete the
+server pods. Neither case has been checked on a cluster.
 
 Before you turn it on:
 
@@ -1067,12 +1082,15 @@ and twin and gets NO VERDICT (`zero_floor`): the run checks the harness, not a r
   at start have not run.
 - Keda mode has not run on OpenShift: not the operator install, the KedaController that the operator and Argo CD both
   manage, the trust in the Thanos Querier's certificate, the ServiceMonitor, the labels of the real metric, the Argo
-  CD rule that keeps the pause annotation, the metrics token (that the cluster's monitoring reads Secret
-  `ray-serve-llm-metrics-token` and sends it, and that Argo CD keeps its first value), or GPU time-slicing. Its
-  objects were checked on a plain Kubernetes cluster (kind) with upstream KEDA 2.19 and stand-ins for the metric and
-  the server: the ScaledObject took the Deployment from 1 to 2 pods when the waiting count rose, the pause held it at
-  0 for a minute, and removing the pause brought back 1 pod. Through a Service, a new pod got none of the requests of
-  a client with open connections; through the router, it got a share.
+  CD rule that keeps the pause annotation, the metrics token, or GPU time-slicing. For the token that means: that the
+  cluster's monitoring reads Secret `ray-serve-llm-metrics-token` and sends it; that Argo CD keeps its first value;
+  the order in which the ignore rule and the Secret land when keda mode is turned on in a running install; and that a
+  running pod keeps its token file when the Secret changes, which Kubernetes documents for a `subPath` mount. Nor has
+  a scrape with the token run while a Serve app runs on a Ray build that checks the token. Keda mode's objects were
+  checked on a plain Kubernetes cluster (kind) with upstream KEDA 2.19 and stand-ins for the metric and the server:
+  the ScaledObject took the Deployment from 1 to 2 pods when the waiting count rose, the pause held it at 0 for a
+  minute, and removing the pause brought back 1 pod. Through a Service, a new pod got none of the requests of a client
+  with open connections; through the router, it got a share.
 - No server pod has yet been seen exporting `ray_vllm_num_requests_waiting` under that name on its metrics port. If
   the name or its labels differ, the query answers nothing, KEDA reads that as 0, and the server never scales.
 - `compileCache.mode` `node` and `shared` have not run on OpenShift.

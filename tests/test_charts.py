@@ -603,7 +603,11 @@ def test_keda_scrape_and_server_share_one_token(keda, render):
     # Not optional: a server that started without the file would stop at start or hold another token.
     assert vols["ray-auth"]["secret"] == {"secretName": creds["name"],
                                           "items": [{"key": creds["key"], "path": "token"}]}
-    assert env_map(c)["RAY_AUTH_TOKEN_PATH"] == mount["mountPath"] + "/token"
+    # Every Ray process reads the file when it starts. A subPath file is not updated in a running container, so a
+    # worker or an attaching process started after the Secret changes still gets the token the head started with; a
+    # file the kubelet rewrites in place would give it a token the running cluster refuses.
+    assert mount["subPath"] == "token"
+    assert env_map(c)["RAY_AUTH_TOKEN_PATH"] == mount["mountPath"]
     # Neither RAY_AUTH_TOKEN (which Ray reads before the path) nor a switch that changes the build's own auth mode.
     assert not {"RAY_AUTH_TOKEN", "RAY_AUTH_MODE", "RAY_AUTH_SKIP_METRICS"} & set(env_map(c))
     # The token is random on every render, so it must be only in the Secret: a checksum or a copy of it in the pod

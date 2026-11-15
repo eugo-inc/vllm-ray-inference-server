@@ -297,7 +297,8 @@ def test_keda_mode_adds_only_the_port_and_the_token_to_the_server(server, render
     pod = keda_deploy["spec"]["template"]["spec"]
     c = container(keda_deploy, "server")
     assert {"name": "RAY_AUTH_TOKEN_PATH", "value": "/etc/ray-auth/token"} in c["env"]
-    assert {"name": "ray-auth", "mountPath": "/etc/ray-auth", "readOnly": True} in c["volumeMounts"]
+    assert {"name": "ray-auth", "mountPath": "/etc/ray-auth/token", "subPath": "token", "readOnly": True} in (
+        c["volumeMounts"])
     assert {"name": "ray-auth", "secret": {"secretName": "ray-serve-llm-metrics-token",
                                            "items": [{"key": "token", "path": "token"}]}} in pod["volumes"]
     c["ports"] = [p for p in c["ports"] if p["name"] != "metrics"]
