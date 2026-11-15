@@ -1,14 +1,14 @@
-2026-01-01T00:00:00.100000000Z 2026-01-01 00:00:00,100 INFO rhvp: model_id=qwen2.5-0.5b-instruct model_source=Qwen/Qwen2.5-0.5B-Instruct engine_kwargs={"gpu_memory_utilization": 0.12, "max_model_len": 8192, "tensor_parallel_size": 1}
+2026-01-01T00:00:00.100000000Z 2026-01-01 00:00:00,100 INFO rhvp: model_id=qwen2.5-0.5b-instruct model_source=Qwen/Qwen2.5-0.5B-Instruct engine_kwargs={"gpu_memory_utilization": 0.15, "max_model_len": 8192, "tensor_parallel_size": 1}
 2026-01-01T00:00:13.000000000Z INFO 2026-01-01 00:00:12,950 serve 1 -- Started Serve in namespace "serve".
-2026-01-01T00:00:13.400000000Z [36m(ServeController pid=863)[0m INFO 2026-01-01 00:00:13,300 controller 863 -- Deploying new version of Deployment(name='LLMServer:qwen2_5-0_5b-instruct', app='llm') (initial target replicas: 1).
-2026-01-01T00:00:13.500000000Z [36m(ServeController pid=863)[0m INFO 2026-01-01 00:00:13,410 controller 863 -- Adding 1 replica to Deployment(name='LLMServer:qwen2_5-0_5b-instruct', app='llm').
-2026-01-01T00:00:13.500000000Z [36m(ServeController pid=863)[0m INFO 2026-01-01 00:00:13,412 controller 863 -- Adding 1 replica to Deployment(name='OpenAiIngress', app='llm').
-2026-01-01T00:00:19.400000000Z [36m(ServeReplica:llm:OpenAiIngress pid=864)[0m W0101 00:00:19.300000 864 torch/_opaque_base.py:6] torch._opaque_base is deprecated, use torch._custom_class_base instead
-2026-01-01T00:00:22.400000000Z [36m(ServeReplica:llm:LLMServer:qwen2_5-0_5b-instruct pid=1881)[0m INFO 2026-01-01 00:00:22,300 llm_LLMServer:qwen2_5-0_5b-instruct aaaaaaaa -- Running tasks to download model files on worker nodes
-2026-01-01T00:00:49.600000000Z [36m(ServeReplica:llm:LLMServer:qwen2_5-0_5b-instruct pid=1881)[0m (EngineCore pid=2227) INFO 01-01 00:00:49 [core.py:139] Initializing a V1 LLM engine (v0.33.0) with config: model='Qwen/Qwen2.5-0.5B-Instruct'
-2026-01-01T00:02:33.000000000Z (RayWorkerProc pid=2293) (Worker pid=2293) INFO 01-01 00:02:33 [default_loader.py:506] Loading weights took 76.25 seconds
-2026-01-01T00:02:45.400000000Z [36m(ServeReplica:llm:LLMServer:qwen2_5-0_5b-instruct pid=1881)[0m (RayWorkerProc pid=2293) (Worker pid=2293) INFO 01-01 00:02:34 [model_runner.py:428] Model loading took 0.93 GiB memory and 87.21 seconds
-2026-01-01T00:02:56.500000000Z [36m(ServeReplica:llm:LLMServer:qwen2_5-0_5b-instruct pid=1881)[0m (EngineCore pid=2227) INFO 01-01 00:02:56 [core.py:405] init engine (profile, create kv cache, warmup model) took 15.89 s (compilation: 0.12 s)
+2026-01-01T00:00:13.400000000Z [36m(ServeController pid=410)[0m INFO 2026-01-01 00:00:13,300 controller 410 -- Deploying new version of Deployment(name='LLMServer:qwen2_5-0_5b-instruct', app='llm') (initial target replicas: 1).
+2026-01-01T00:00:13.500000000Z [36m(ServeController pid=410)[0m INFO 2026-01-01 00:00:13,410 controller 410 -- Adding 1 replica to Deployment(name='LLMServer:qwen2_5-0_5b-instruct', app='llm').
+2026-01-01T00:00:13.500000000Z [36m(ServeController pid=410)[0m INFO 2026-01-01 00:00:13,412 controller 410 -- Adding 1 replica to Deployment(name='OpenAiIngress', app='llm').
+2026-01-01T00:00:19.400000000Z [36m(ServeReplica:llm:OpenAiIngress pid=411)[0m W0101 00:00:19.300000 411 torch/_opaque_base.py:6] torch._opaque_base is deprecated, use torch._custom_class_base instead
+2026-01-01T00:00:22.400000000Z [36m(ServeReplica:llm:LLMServer:qwen2_5-0_5b-instruct pid=1520)[0m INFO 2026-01-01 00:00:22,300 llm_LLMServer:qwen2_5-0_5b-instruct aaaaaaaa -- Running tasks to download model files on worker nodes
+2026-01-01T00:00:49.600000000Z [36m(ServeReplica:llm:LLMServer:qwen2_5-0_5b-instruct pid=1520)[0m (EngineCore pid=1607) INFO 01-01 00:00:49 [core.py:139] Initializing a V1 LLM engine (v0.33.0) with config: model='Qwen/Qwen2.5-0.5B-Instruct'
+2026-01-01T00:02:33.000000000Z (RayWorkerProc pid=1663) (Worker pid=1663) INFO 01-01 00:02:33 [default_loader.py:506] Loading weights took 71.40 seconds
+2026-01-01T00:02:45.400000000Z [36m(ServeReplica:llm:LLMServer:qwen2_5-0_5b-instruct pid=1520)[0m (RayWorkerProc pid=1663) (Worker pid=1663) INFO 01-01 00:02:34 [model_runner.py:428] Model loading took 0.93 GiB memory and 82.36 seconds
+2026-01-01T00:02:56.500000000Z [36m(ServeReplica:llm:LLMServer:qwen2_5-0_5b-instruct pid=1520)[0m (EngineCore pid=1607) INFO 01-01 00:02:56 [core.py:405] init engine (profile, create kv cache, warmup model) took 14.62 s (compilation: 0.08 s)
 2026-01-01T00:03:00.200000000Z INFO 2026-01-01 00:03:00,200 serve 1 -- Application 'llm' is ready at http://0.0.0.0:8000/.
 2026-01-01T00:03:00.250000000Z {"asctime": "2026-01-01 00:03:00,250", "levelname": "INFO", "message": "app 'llm' is RUNNING after 166.8 s", "filename": "serve_app.py"}
 2026-01-01T00:03:00.280000000Z {"asctime": "2026-01-01 00:03:00,280", "levelname": "INFO", "message": "ready file written: /tmp/r/rhvp-ready", "filename": "serve_app.py"}
