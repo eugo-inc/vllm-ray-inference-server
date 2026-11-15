@@ -1096,8 +1096,8 @@ check stopped both of its tries has no pair.
 
 ### Starts that succeed first time
 
-On the same busy machine, vLLM's start-up memory check stopped 4 of 12 upstream starts and 0 of 28 Eugo starts. Eugo's
-vLLM carries a fix that mitigates this.
+On the same busy machine, vLLM's start-up memory check stopped 15 of 45 upstream starts and 0 of 11 Eugo starts.
+Eugo's vLLM carries a fix that mitigates this.
 
 Not yet measured: this pattern's Ray Serve LLM server, a new node, `compileCache.mode: node` or `shared`, larger
 models, other GPUs. Once the image is released, compare mode's start-up case (`startup/first_answer_s`) can rerun these.
