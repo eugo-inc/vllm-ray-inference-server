@@ -104,6 +104,37 @@ def memory_profiling_failed(log: str) -> bool:
     return MEMORY_PROFILING_ERROR in log
 
 
+#: The prefix Ray puts on each line a Ray Serve replica prints, and on the lines of the processes it starts (vLLM's
+#: engine among them): "(ServeReplica:<app>:<deployment> pid=<process id>)", plus ", ip=<address>" for a replica on
+#: another node. Every replica Ray Serve starts is a new process, so the process id names one replica start.
+SERVE_REPLICA = re.compile(r"^\(ServeReplica:(?P<deployment>[^\s()]+) pid=(?P<pid>\d+)(?:, ip=[^)]*)?\)")
+
+
+def memory_check_restarts(log: str) -> int:
+    """How many replicas in one server's log stopped at vLLM's start-up memory check and were followed by another
+    replica of the same deployment: the restarts the pattern's own Ray Serve LLM server makes by itself, inside one
+    start of the server, which the runner never sees as an exit.
+
+    A replica is the set of lines that carry its prefix (SERVE_REPLICA). It counts once, however many of its lines
+    show the check failing (Ray relays the same failure several times, some copies seconds late), and only when a
+    replica of the same deployment prints its first line after the first of those lines. Not counted: a log without
+    the prefix (a `vllm serve` server, which exits at the check instead), a replica that stopped for any other reason,
+    and a last replica that stopped at the check with none after it (the server then exits, and the runner's own
+    start again, `start_retries`, counts it)."""
+    first_line: dict[tuple[str, str], int] = {}  # replica (deployment, process id) -> number of its first line
+    failed_at: dict[tuple[str, str], int] = {}  # replica -> number of its first line that shows the check failing
+    for number, (_, text) in enumerate(lines(log)):
+        match = SERVE_REPLICA.match(text)
+        if not match:
+            continue
+        replica = (match.group("deployment"), match.group("pid"))
+        first_line.setdefault(replica, number)
+        if MEMORY_PROFILING_ERROR in text:
+            failed_at.setdefault(replica, number)
+    return sum(1 for (deployment, pid), at in failed_at.items()
+               if any(other[0] == deployment and other[1] != pid and first > at for other, first in first_line.items()))
+
+
 def breakdown(log: str, started_epoch: float) -> list[dict]:
     """The start-up phases found in `log`, in log order. `started_epoch` is when the launch asked for the server."""
     out: list[dict] = []

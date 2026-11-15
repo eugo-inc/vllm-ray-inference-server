@@ -55,21 +55,24 @@ def recorded_env(env: Mapping[str, str]) -> tuple[dict[str, str], list[str]]:
 def record(replica: int, command: Sequence[str] | None, args: Sequence[str], env: Mapping[str, str] | None,
            env_source: str, started_at: str | None = None, image_entrypoint: Sequence[str] | None = None,
            image_cmd: Sequence[str] | None = None, start_retries: int = 0, gpus: str | None = None,
-           gpu_uuids: Sequence[str] | None = None, discarded: bool = False) -> dict:
+           gpu_uuids: Sequence[str] | None = None, discarded: bool = False, engine_restarts: int = 0) -> dict:
     """One server record. `replica` is 1 for a launch's first server and 2 for the replica a scale launch adds.
     `command` is what the runner set in place of the image's entrypoint (None: the image's own ran). `entrypoint` is
     "image" also when that command is the image's own entrypoint (as for preset ray-serve-llm), which only a backend
     that reads the image (`image_entrypoint`) can tell. `env` is the environment the server process saw, as read from
     `env_source`; None records nothing. `start_retries` is how many times this replica was started again after
-    vLLM's start-up memory check stopped it (the record describes the last start). `gpus` is the GPU request the
+    vLLM's start-up memory check stopped it (the record describes the last start); `engine_restarts`, how many times
+    this replica's server started vLLM's engine again by itself inside a start, after that check stopped it (the
+    pattern's Ray Serve LLM server; logs.memory_check_restarts), in all of its starts. `gpus` is the GPU request the
     platform got for this start (docker: "all" or device ids), `gpu_uuids` the UUIDs of the GPUs that request reached
     (for a MIG device, its parent GPU's: see dockerapi.py); None when the backend does not say.
     `discarded` marks a server of a launch's first try, taken down when its GuideLLM timed out so the launch could
     run again (in either mode): none of the launch's figures come from it."""
     if isinstance(replica, bool) or not isinstance(replica, int) or replica < 1:
         raise ValueError(f"replica must be a whole number of at least 1, got {replica!r}")
-    if isinstance(start_retries, bool) or not isinstance(start_retries, int) or start_retries < 0:
-        raise ValueError(f"start_retries must be a whole number of at least 0, got {start_retries!r}")
+    for name, value in (("start_retries", start_retries), ("engine_restarts", engine_restarts)):
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError(f"{name} must be a whole number of at least 0, got {value!r}")
     if env_source not in ENV_SOURCES:
         raise ValueError(f"env_source must be one of {', '.join(ENV_SOURCES)}, got {env_source!r}")
     if env is None or env_source == "none":
@@ -88,6 +91,7 @@ def record(replica: int, command: Sequence[str] | None, args: Sequence[str], env
         "env_source": env_source,
         "env_dropped": dropped,
         "start_retries": start_retries,
+        "engine_restarts": engine_restarts,
         "gpus": gpus,
         "gpu_uuids": list(gpu_uuids) if gpu_uuids is not None else None,
         "discarded": bool(discarded),

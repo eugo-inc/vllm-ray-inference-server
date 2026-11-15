@@ -1330,7 +1330,12 @@
         "start_retries": {
           "type": "integer",
           "minimum": 0,
-          "description": "How many times a server of this launch was started again after it stopped at vLLM's start-up memory check ('Error in memory profiling'; a GPU whose memory is the machine's own fails it when another program frees memory while it measures). At most 1 per start of a server: a second such failure of the same start fails the launch (SIDE_FAILED). A launch whose load runs again starts its servers anew, each with its own retry. In mode scaleout this is the sum over the launch's server records, a discarded try's included; each record's start_retries, replica and discarded say which server it was. The start-up figures are timed from the side's last start; the replica the forced step adds is timed from when it was first asked for, so the time its stopped start took counts."
+          "description": "How many times a server of this launch was started again after it stopped at vLLM's start-up memory check ('Error in memory profiling'; a GPU whose memory is the machine's own fails it when another program frees memory while it measures). At most 1 per start of a server: a second such failure of the same start fails the launch (SIDE_FAILED). A launch whose load runs again starts its servers anew, each with its own retry. In mode scaleout this is the sum over the launch's server records, a discarded try's included; each record's start_retries, replica and discarded say which server it was. The start-up figures are timed from the side's last start; the replica the forced step adds is timed from when it was first asked for, so the time its stopped start took counts. Not counted here: an engine that the server itself started again inside one start (engine_restarts)."
+        },
+        "engine_restarts": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "How many times a server of this launch started vLLM's engine again by itself, inside one start of the server, after vLLM's start-up memory check stopped it ('Error in memory profiling'). The pattern's own Ray Serve LLM server does this: Ray Serve replaces a replica that fails to start, so the server does not exit and the runner neither sees nor makes a start again (start_retries, starts). Read from each server's log when the runner is done with it (rhvp_compare/logs.py, memory_check_restarts): a Ray Serve replica whose lines show the check failing, followed by a new replica of the same deployment; a replica stopped for any other reason is not counted, and a vllm-openai side's server, which exits at the check instead, always gives 0. It is the sum over the launch's server records (a discarded try's included; a record also carries those of its stopped start before a start again), except a stopped start whose start again never began, which has no record and counts here only. A start-up figure includes the engine starts that stopped inside the starts it is timed from (the side's, those of its last start; the replica the forced step adds, those of each of its starts), and the phases read from a server's log add up their lines from every engine start in it, the stopped ones' included; a replica replaced after the server first answered counts here too, outside the start-up figures. A file written before this field existed has none; readers take that as 0."
         },
         "values": {
           "type": "object",
@@ -1343,7 +1348,7 @@
         "starts": {
           "type": "integer",
           "minimum": 0,
-          "description": "How many servers this launch started: in mode levels 1, in mode scaleout 2 for a scored launch (the first replica and the one the forced step adds), plus one for every start again after vLLM's start-up memory check and every new start after a GuideLLM time-out. Only starts that the platform accepted count."
+          "description": "How many servers this launch started: in mode levels 1, in mode scaleout 2 for a scored launch (the first replica and the one the forced step adds), plus one for every start again after vLLM's start-up memory check and every new start after a GuideLLM time-out. Only starts that the platform accepted count; an engine that a server started again inside its own start (engine_restarts) is not a new start."
         },
         "load_timeouts": {
           "type": "integer",
@@ -2277,7 +2282,12 @@
           "type": "integer",
           "minimum": 0,
           "maximum": 1,
-          "description": "How many times this server was started again after it stopped at vLLM's start-up memory check (at most once); the record describes the last start."
+          "description": "How many times this server was started again after it stopped at vLLM's start-up memory check (at most once); the record describes the last start. Not counted here: an engine restart inside a start (engine_restarts)."
+        },
+        "engine_restarts": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "How many times this server started vLLM's engine again by itself inside a start, after vLLM's start-up memory check stopped it (the pattern's Ray Serve LLM server replacing a replica; see the launch's engine_restarts), in this start and in a start of it that stopped before it was started again. A file written before this field existed has none."
         },
         "gpus": {
           "type": [

@@ -777,6 +777,7 @@
      "env_source": "process",
      "env_dropped": [],
      "start_retries": 0,
+     "engine_restarts": 0,
      "gpus": null,
      "gpu_uuids": null,
      "discarded": false
@@ -784,6 +785,7 @@
    ],
    "starts": 1,
    "start_retries": 0,
+   "engine_restarts": 0,
    "load_timeouts": 0,
    "load_retries": 0
   },
@@ -895,6 +897,7 @@
      "env_source": "process",
      "env_dropped": [],
      "start_retries": 0,
+     "engine_restarts": 0,
      "gpus": null,
      "gpu_uuids": null,
      "discarded": false
@@ -902,6 +905,7 @@
    ],
    "starts": 1,
    "start_retries": 0,
+   "engine_restarts": 0,
    "load_timeouts": 0,
    "load_retries": 0
   },
@@ -1150,6 +1154,7 @@
      "env_source": "process",
      "env_dropped": [],
      "start_retries": 0,
+     "engine_restarts": 0,
      "gpus": null,
      "gpu_uuids": null,
      "discarded": false
@@ -1157,6 +1162,7 @@
    ],
    "starts": 1,
    "start_retries": 0,
+   "engine_restarts": 0,
    "load_timeouts": 0,
    "load_retries": 0
   },
@@ -1405,6 +1411,7 @@
      "env_source": "process",
      "env_dropped": [],
      "start_retries": 0,
+     "engine_restarts": 0,
      "gpus": null,
      "gpu_uuids": null,
      "discarded": false
@@ -1412,6 +1419,7 @@
    ],
    "starts": 1,
    "start_retries": 0,
+   "engine_restarts": 0,
    "load_timeouts": 0,
    "load_retries": 0
   },
@@ -1660,6 +1668,7 @@
      "env_source": "process",
      "env_dropped": [],
      "start_retries": 0,
+     "engine_restarts": 0,
      "gpus": null,
      "gpu_uuids": null,
      "discarded": false
@@ -1667,6 +1676,7 @@
    ],
    "starts": 1,
    "start_retries": 0,
+   "engine_restarts": 0,
    "load_timeouts": 0,
    "load_retries": 0
   },
@@ -1915,6 +1925,7 @@
      "env_source": "process",
      "env_dropped": [],
      "start_retries": 0,
+     "engine_restarts": 0,
      "gpus": null,
      "gpu_uuids": null,
      "discarded": false
@@ -1922,6 +1933,7 @@
    ],
    "starts": 1,
    "start_retries": 0,
+   "engine_restarts": 0,
    "load_timeouts": 0,
    "load_retries": 0
   },
@@ -2170,6 +2182,7 @@
      "env_source": "process",
      "env_dropped": [],
      "start_retries": 0,
+     "engine_restarts": 0,
      "gpus": null,
      "gpu_uuids": null,
      "discarded": false
@@ -2177,6 +2190,7 @@
    ],
    "starts": 1,
    "start_retries": 0,
+   "engine_restarts": 0,
    "load_timeouts": 0,
    "load_retries": 0
   },
@@ -2425,6 +2439,7 @@
      "env_source": "process",
      "env_dropped": [],
      "start_retries": 0,
+     "engine_restarts": 0,
      "gpus": null,
      "gpu_uuids": null,
      "discarded": false
@@ -2432,6 +2447,7 @@
    ],
    "starts": 1,
    "start_retries": 0,
+   "engine_restarts": 0,
    "load_timeouts": 0,
    "load_retries": 0
   },
@@ -2680,6 +2696,7 @@
      "env_source": "process",
      "env_dropped": [],
      "start_retries": 0,
+     "engine_restarts": 0,
      "gpus": null,
      "gpu_uuids": null,
      "discarded": false
@@ -2687,6 +2704,7 @@
    ],
    "starts": 1,
    "start_retries": 0,
+   "engine_restarts": 0,
    "load_timeouts": 0,
    "load_retries": 0
   },
@@ -2935,6 +2953,7 @@
      "env_source": "process",
      "env_dropped": [],
      "start_retries": 0,
+     "engine_restarts": 0,
      "gpus": null,
      "gpu_uuids": null,
      "discarded": false
@@ -2942,6 +2961,7 @@
    ],
    "starts": 1,
    "start_retries": 0,
+   "engine_restarts": 0,
    "load_timeouts": 0,
    "load_retries": 0
   },
@@ -3190,6 +3210,7 @@
      "env_source": "process",
      "env_dropped": [],
      "start_retries": 0,
+     "engine_restarts": 0,
      "gpus": null,
      "gpu_uuids": null,
      "discarded": false
@@ -3197,6 +3218,7 @@
    ],
    "starts": 1,
    "start_retries": 0,
+   "engine_restarts": 0,
    "load_timeouts": 0,
    "load_retries": 0
   },
@@ -3445,6 +3467,7 @@
      "env_source": "process",
      "env_dropped": [],
      "start_retries": 0,
+     "engine_restarts": 0,
      "gpus": null,
      "gpu_uuids": null,
      "discarded": false
@@ -3452,6 +3475,7 @@
    ],
    "starts": 1,
    "start_retries": 0,
+   "engine_restarts": 0,
    "load_timeouts": 0,
    "load_retries": 0
   },
@@ -3700,6 +3724,7 @@
      "env_source": "process",
      "env_dropped": [],
      "start_retries": 0,
+     "engine_restarts": 0,
      "gpus": null,
      "gpu_uuids": null,
      "discarded": false
@@ -3707,6 +3732,7 @@
    ],
    "starts": 1,
    "start_retries": 0,
+   "engine_restarts": 0,
    "load_timeouts": 0,
    "load_retries": 0
   },
@@ -3955,6 +3981,7 @@
      "env_source": "process",
      "env_dropped": [],
      "start_retries": 0,
+     "engine_restarts": 0,
      "gpus": null,
      "gpu_uuids": null,
      "discarded": false
@@ -3962,6 +3989,7 @@
    ],
    "starts": 1,
    "start_retries": 0,
+   "engine_restarts": 0,
    "load_timeouts": 0,
    "load_retries": 0
   },
@@ -4210,6 +4238,7 @@
      "env_source": "process",
      "env_dropped": [],
      "start_retries": 0,
+     "engine_restarts": 0,
      "gpus": null,
      "gpu_uuids": null,
      "discarded": false
@@ -4217,6 +4246,7 @@
    ],
    "starts": 1,
    "start_retries": 0,
+   "engine_restarts": 0,
    "load_timeouts": 0,
    "load_retries": 0
   },
@@ -4465,6 +4495,7 @@
      "env_source": "process",
      "env_dropped": [],
      "start_retries": 0,
+     "engine_restarts": 0,
      "gpus": null,
      "gpu_uuids": null,
      "discarded": false
@@ -4472,6 +4503,7 @@
    ],
    "starts": 1,
    "start_retries": 0,
+   "engine_restarts": 0,
    "load_timeouts": 0,
    "load_retries": 0
   },
@@ -4720,6 +4752,7 @@
      "env_source": "process",
      "env_dropped": [],
      "start_retries": 0,
+     "engine_restarts": 0,
      "gpus": null,
      "gpu_uuids": null,
      "discarded": false
@@ -4727,6 +4760,7 @@
    ],
    "starts": 1,
    "start_retries": 0,
+   "engine_restarts": 0,
    "load_timeouts": 0,
    "load_retries": 0
   },
@@ -4975,6 +5009,7 @@
      "env_source": "process",
      "env_dropped": [],
      "start_retries": 0,
+     "engine_restarts": 0,
      "gpus": null,
      "gpu_uuids": null,
      "discarded": false
@@ -4982,6 +5017,7 @@
    ],
    "starts": 1,
    "start_retries": 0,
+   "engine_restarts": 0,
    "load_timeouts": 0,
    "load_retries": 0
   },
@@ -5230,6 +5266,7 @@
      "env_source": "process",
      "env_dropped": [],
      "start_retries": 0,
+     "engine_restarts": 0,
      "gpus": null,
      "gpu_uuids": null,
      "discarded": false
@@ -5237,6 +5274,7 @@
    ],
    "starts": 1,
    "start_retries": 0,
+   "engine_restarts": 0,
    "load_timeouts": 0,
    "load_retries": 0
   },
@@ -5485,6 +5523,7 @@
      "env_source": "process",
      "env_dropped": [],
      "start_retries": 0,
+     "engine_restarts": 0,
      "gpus": null,
      "gpu_uuids": null,
      "discarded": false
@@ -5492,6 +5531,7 @@
    ],
    "starts": 1,
    "start_retries": 0,
+   "engine_restarts": 0,
    "load_timeouts": 0,
    "load_retries": 0
   },
@@ -5740,6 +5780,7 @@
      "env_source": "process",
      "env_dropped": [],
      "start_retries": 0,
+     "engine_restarts": 0,
      "gpus": null,
      "gpu_uuids": null,
      "discarded": false
@@ -5747,6 +5788,7 @@
    ],
    "starts": 1,
    "start_retries": 0,
+   "engine_restarts": 0,
    "load_timeouts": 0,
    "load_retries": 0
   },
@@ -5995,6 +6037,7 @@
      "env_source": "process",
      "env_dropped": [],
      "start_retries": 0,
+     "engine_restarts": 0,
      "gpus": null,
      "gpu_uuids": null,
      "discarded": false
@@ -6002,6 +6045,7 @@
    ],
    "starts": 1,
    "start_retries": 0,
+   "engine_restarts": 0,
    "load_timeouts": 0,
    "load_retries": 0
   },
@@ -6250,6 +6294,7 @@
      "env_source": "process",
      "env_dropped": [],
      "start_retries": 0,
+     "engine_restarts": 0,
      "gpus": null,
      "gpu_uuids": null,
      "discarded": false
@@ -6257,6 +6302,7 @@
    ],
    "starts": 1,
    "start_retries": 0,
+   "engine_restarts": 0,
    "load_timeouts": 0,
    "load_retries": 0
   },
@@ -6505,6 +6551,7 @@
      "env_source": "process",
      "env_dropped": [],
      "start_retries": 0,
+     "engine_restarts": 0,
      "gpus": null,
      "gpu_uuids": null,
      "discarded": false
@@ -6512,6 +6559,7 @@
    ],
    "starts": 1,
    "start_retries": 0,
+   "engine_restarts": 0,
    "load_timeouts": 0,
    "load_retries": 0
   },
@@ -6760,6 +6808,7 @@
      "env_source": "process",
      "env_dropped": [],
      "start_retries": 0,
+     "engine_restarts": 0,
      "gpus": null,
      "gpu_uuids": null,
      "discarded": false
@@ -6767,6 +6816,7 @@
    ],
    "starts": 1,
    "start_retries": 0,
+   "engine_restarts": 0,
    "load_timeouts": 0,
    "load_retries": 0
   },
@@ -7015,6 +7065,7 @@
      "env_source": "process",
      "env_dropped": [],
      "start_retries": 0,
+     "engine_restarts": 0,
      "gpus": null,
      "gpu_uuids": null,
      "discarded": false
@@ -7022,6 +7073,7 @@
    ],
    "starts": 1,
    "start_retries": 0,
+   "engine_restarts": 0,
    "load_timeouts": 0,
    "load_retries": 0
   },
@@ -7270,6 +7322,7 @@
      "env_source": "process",
      "env_dropped": [],
      "start_retries": 0,
+     "engine_restarts": 0,
      "gpus": null,
      "gpu_uuids": null,
      "discarded": false
@@ -7277,6 +7330,7 @@
    ],
    "starts": 1,
    "start_retries": 0,
+   "engine_restarts": 0,
    "load_timeouts": 0,
    "load_retries": 0
   },
@@ -7525,6 +7579,7 @@
      "env_source": "process",
      "env_dropped": [],
      "start_retries": 0,
+     "engine_restarts": 0,
      "gpus": null,
      "gpu_uuids": null,
      "discarded": false
@@ -7532,6 +7587,7 @@
    ],
    "starts": 1,
    "start_retries": 0,
+   "engine_restarts": 0,
    "load_timeouts": 0,
    "load_retries": 0
   },
@@ -7780,6 +7836,7 @@
      "env_source": "process",
      "env_dropped": [],
      "start_retries": 0,
+     "engine_restarts": 0,
      "gpus": null,
      "gpu_uuids": null,
      "discarded": false
@@ -7787,6 +7844,7 @@
    ],
    "starts": 1,
    "start_retries": 0,
+   "engine_restarts": 0,
    "load_timeouts": 0,
    "load_retries": 0
   },
@@ -8035,6 +8093,7 @@
      "env_source": "process",
      "env_dropped": [],
      "start_retries": 0,
+     "engine_restarts": 0,
      "gpus": null,
      "gpu_uuids": null,
      "discarded": false
@@ -8042,6 +8101,7 @@
    ],
    "starts": 1,
    "start_retries": 0,
+   "engine_restarts": 0,
    "load_timeouts": 0,
    "load_retries": 0
   },
@@ -8290,6 +8350,7 @@
      "env_source": "process",
      "env_dropped": [],
      "start_retries": 0,
+     "engine_restarts": 0,
      "gpus": null,
      "gpu_uuids": null,
      "discarded": false
@@ -8297,6 +8358,7 @@
    ],
    "starts": 1,
    "start_retries": 0,
+   "engine_restarts": 0,
    "load_timeouts": 0,
    "load_retries": 0
   },
@@ -8545,6 +8607,7 @@
      "env_source": "process",
      "env_dropped": [],
      "start_retries": 0,
+     "engine_restarts": 0,
      "gpus": null,
      "gpu_uuids": null,
      "discarded": false
@@ -8552,6 +8615,7 @@
    ],
    "starts": 1,
    "start_retries": 0,
+   "engine_restarts": 0,
    "load_timeouts": 0,
    "load_retries": 0
   },
@@ -8800,6 +8864,7 @@
      "env_source": "process",
      "env_dropped": [],
      "start_retries": 0,
+     "engine_restarts": 0,
      "gpus": null,
      "gpu_uuids": null,
      "discarded": false
@@ -8807,6 +8872,7 @@
    ],
    "starts": 1,
    "start_retries": 0,
+   "engine_restarts": 0,
    "load_timeouts": 0,
    "load_retries": 0
   },
@@ -9055,6 +9121,7 @@
      "env_source": "process",
      "env_dropped": [],
      "start_retries": 0,
+     "engine_restarts": 0,
      "gpus": null,
      "gpu_uuids": null,
      "discarded": false
@@ -9062,6 +9129,7 @@
    ],
    "starts": 1,
    "start_retries": 0,
+   "engine_restarts": 0,
    "load_timeouts": 0,
    "load_retries": 0
   }

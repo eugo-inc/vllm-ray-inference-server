@@ -171,7 +171,8 @@ def _synthesize(config: dict, platform: str) -> dict:
             "levels": [], "values": {"startup/ready_s": ready, "startup/first_answer_s": first},
             "artifacts": {"server_log": f"{folder}/server.log"},
             "servers": [_server(plan, of, 1, _iso(started))],
-            "starts": 1, "start_retries": 0, "load_timeouts": 0, "load_retries": 0,
+            "starts": 1, "start_retries": 0, "engine_restarts": 0, "load_timeouts": 0,
+            "load_retries": 0,
         }
         at = (started + timedelta(seconds=first + 5)).timestamp()
         if planned["kind"] != plans.WARMUP and scale_mode:
