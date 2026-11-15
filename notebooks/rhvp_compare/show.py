@@ -227,10 +227,15 @@ def _head(results: dict | None, found: list[dict], problems: list[str]) -> list[
     if run.get("error_code"):
         parts.append(line(words.RUN_CODE.format(code=run["error_code"])))
     analysis = results.get("analysis") or {}
-    lost = [f"{row['case']} (A {row['lost']['A']}, B {row['lost']['B']})"
-            for row in analysis.get("comparisons") or [] if any((row.get("lost") or {}).values())]
+    lost_rows = [row for row in analysis.get("comparisons") or [] if any((row.get("lost") or {}).values())]
+    lost = [f"{row['case']} (A {row['lost']['A']}, B {row['lost']['B']})" for row in lost_rows]
     if lost:
-        parts.append(line(words.RUN_LOST.format(lost="; ".join(lost))))
+        # The reason those cases got (a check that comes first, such as more_than_one_node, can apply instead of
+        # side_failed): named when they share one, as the twin-zero notice below does.
+        lost_reasons = {row.get("reason") for row in lost_rows}
+        shared = lost_reasons.pop() if len(lost_reasons) == 1 else None
+        parts.append(line(words.RUN_LOST.format(
+            lost="; ".join(lost), reason=words.RUN_LOST_REASON.format(reason=shared) if shared else "")))
     twins = [t for t in analysis.get("same_vs_same") or [] if t.get("p_raw") is not None]
     differs = [words.TWIN_DIFFERS_CASE.format(side=t["side"], case=t["case"], p=f"{t['p_raw']:.3g}")
                for t in twins if t["p_raw"] < 0.05]

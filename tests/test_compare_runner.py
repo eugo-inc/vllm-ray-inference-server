@@ -1001,6 +1001,7 @@ def test_the_notebook_names_the_reason_a_twins_zero_gives_its_cases(tmp_path):
         head = "".join(show._head(results, [], []))
         assert f"(no verdict for c4/output_tokens_per_s: {words.REASON_TEXT[reason]})" in head
         assert "(no verdict for c4/output_tokens_per_s: a figure of 0)" not in head
+        assert words.REASON_TEXT["nonpositive_value"] not in head
     # The cases of one 0 that got different reasons: none is named, as in the notes. This plan's floor groups are one
     # case each, so the test puts a case with another reason into the 0's group.
     results, _, _ = run(tmp_path / "mixed", FakeBackend(zero={7: 4}), rounds={"count": 2, "warmup": False})
@@ -1323,6 +1324,23 @@ def test_launches_on_two_nodes_give_no_verdict(tmp_path):
     assert {(row["outcome"], row["reason"]) for row in rows} == {("no_verdict", "more_than_one_node")}
     assert [r["code"] for r in results["analysis"]["refusals"]] == ["MORE_THAN_ONE_NODE"]
     assert [n["name"] for n in results["provenance"]["nodes"]] == ["node-2", "node-1"]
+
+
+def test_rounds_lost_to_a_failed_side_name_the_reason_the_cases_got(tmp_path):
+    # Launch 5 is side B in round 1. On one node its cases get side_failed; on two nodes more_than_one_node comes
+    # first, and the notebook's line and results.md name that one, as the table does.
+    for name, backend, reason in (("one", FakeBackend(fail_launch=5), "side_failed"),
+                                  ("two", FakeBackend(fail_launch=5, nodes=("node-1", "node-2")),
+                                   "more_than_one_node")):
+        results, _, the_runner = run(tmp_path / name, backend)
+        lost = [row for row in results["analysis"]["comparisons"] if any(row["lost"].values())]
+        assert lost and {row["reason"] for row in lost} == {reason}
+        head = "".join(show._head(results, [], []))
+        assert f"Those cases have NO VERDICT ({reason})." in head
+        text = (the_runner.dir / "results.md").read_text()
+        assert f"failed on its own account (so NO VERDICT, {reason}):" in text
+        other = {"side_failed": "more_than_one_node", "more_than_one_node": "side_failed"}[reason]
+        assert f"NO VERDICT ({other})." not in head and f"NO VERDICT, {other}):" not in text
 
 
 @pytest.mark.parametrize("twins, launches, reason", [("A", 24, "one_sided_floor"), ("none", 16, "no_floor")])
@@ -1717,9 +1735,12 @@ def test_a_surge_in_which_nothing_finished_gives_no_verdict(tmp_path):
     text = (the_runner.dir / "results.md").read_text()
     assert "- launch 5 (B): 0 requests failed, 0 succeeded" in text
     # Another reason (two nodes, a side that failed) can come before the 0, so this line names none; the table does.
-    assert "a figure of 0 gives its case NO VERDICT:" in text and "NO VERDICT (nonpositive_value):" not in text
+    # A twin's 0 counts only in a round where its side has a figure, so the line says that too.
+    assert "on side A or B it gives its case NO VERDICT" in text and "NO VERDICT (nonpositive_value):" not in text
+    assert "A twin's 0 in a round where its side has no figure is neither graded nor named:" in text
     head = "".join(show._head(results, [], []))
     assert "launch 5 (B): 0 failed, 0 finished" in head
+    assert "unless a reason the analysis checks first applies" in head and "(nonpositive_value)" not in head
 
 
 def test_a_twins_zero_attainment_gives_that_case_no_verdict(tmp_path):

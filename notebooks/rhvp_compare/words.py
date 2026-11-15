@@ -111,15 +111,20 @@ RUN_LEVELS = "Load levels left out, where requests failed or none finished: {lev
 RUN_LEVEL = "launch {index} ({side}) at {concurrency} streams"
 RUN_SURGES = ("Surges in which requests failed or none finished: {surges}. Only their latency medians are left out: "
               "a failed request counts as one that missed the goals in the share within the goals and in goodput. A "
-              "surge in which no request finished counts as 0 for both, and a figure of 0 gives its case NO "
-              "VERDICT.")
+              "surge in which no request finished counts as 0 for both. A 0 gives no ratio: on side A or B it gives "
+              "its case NO VERDICT, and on a twin, in a round where its side also has a figure, it gives NO VERDICT "
+              "to every case whose noise floor uses that comparison (in both, unless a reason the analysis checks "
+              "first applies). A twin's 0 in a round where its side has no figure is neither graded nor named.")
 RUN_SURGE = "launch {index} ({side}): {errored} failed, {successful} finished"
 ENERGY_MIXED = ("Tokens per joule did not come from one method in every launch: {levels}. The energy counter needs as "
                 "many distinct readings in a level as energy.minSamples; otherwise the power samples give the mean.")
 ENERGY_MIXED_LEVEL = "at {concurrency} streams, the energy counter in {counter} and the power samples in {power}"
 RUN_SERVER = "The live server was not brought back after the run; the results' run.errors say how to bring it back."
-RUN_LOST = ("Rounds lost to one side failing on its own account, per case: {lost}. Those cases have NO VERDICT "
-            "(side_failed).")
+RUN_LOST = ("Rounds lost to one side failing on its own account, per case: {lost}. Those cases have NO VERDICT"
+            "{reason}.")
+#: The reason those cases got, when they all got the same one (side_failed, or more_than_one_node, which is checked
+#: first); none otherwise.
+RUN_LOST_REASON = " ({reason})"
 RUN_OTHERS = "Other runs in the results volume: {runs}."
 TWIN_DIFFERS = ("A side leaned the same way against its twin in more rounds than chance would usually give: {cases}. "
                 "These p-values are not corrected for the {tested} comparisons of a side with its twin in this run; "
