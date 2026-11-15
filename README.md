@@ -693,9 +693,31 @@ it. Output tokens per second, over the whole level, is not timed per token.
 
 ### What has not been checked
 
-- The rule with twins (rounds of A, A~same, B, B~same; the bar from the twins) has run only against fake servers in
-  the unit tests. No run with real servers has used it, and no run has had 8 rounds.
-- Real inference servers have run in two smoke runs only, under the earlier rule (rounds of A and B, no twins), with
+- The rule with twins (rounds of A, A~same, B, B~same; the bar from the twins) has run with real servers in three
+  comparisons, all with docker on one machine with one GPU whose memory is the machine's own
+  (`scripts/compare-local.sh`). Each was planned as 8 rounds with a twin for both sides, after one warm-up launch per
+  side, and in each both sides used the `ray-serve-llm` preset: this pattern's own server. Two finished all 8 rounds
+  (34 launches each). The third was stopped in round 7 by a script around the runner that stops a run when the
+  machine's free memory runs low: the runner recorded the launch it was in as `STOPPED`, saved the run as partial and
+  analysed the 6 rounds it had finished. No other launch failed, and the runner started no server again
+  (`start_retries` 0). GuideLLM timed out in six launches across the three runs; each of them ran again from a new
+  start, as "What a run does" describes, and finished. These runs show that the runner, the load and the rule work end
+  to end with real servers; their figures are not reported here.
+- What those three runs leave unchecked. One machine, one GPU, docker only, and one model: the example's, already on the
+  model volume, so the warm-up launches downloaded nothing. Not the default settings: one load level (1 stream for 5 s,
+  64 prompt and 16 output tokens) instead of three 60-second levels, `gpuMemoryUtilization` 0.12, and
+  `startup/first_answer_s` as the only primary case, so no run with real servers has graded the default primary cases.
+  No energy (`energy.source: none`). No `vllm-openai` or `custom` side, no live server stopped and started again
+  (`SERVER_CONTAINER`), and no warm compile cache. Images built for these runs, not by the pattern: two images built on
+  vLLM 0.33 (0.33.0 and a development build of it), each with Ray Serve LLM and this pattern's server files; the 0.33.0
+  one got Ray 2.60.0, with one import line in Ray changed for a vLLM module that moved in 0.33. The image the cluster
+  builds from `inference-server/` (vLLM 0.29.0) has not run as a side. In one of the three runs both sides started
+  through a wrapper `command` that then ran the pattern's entrypoint, on the same images with a test layer added.
+  Earlier code: the comparison code (`notebooks/rhvp_compare`, `scripts/compare-local.sh`) of commit `7ec0b75`, comments
+  aside, and server files with an earlier form of the engine-flag handling, never merged, which read each value as YAML
+  and checked nothing against vLLM's engine arguments. The runner's later changes, such as the engine restart count
+  (`engine_restarts`) and the CUDA cache of a docker side with a warm compile cache, were not in them.
+- Before those, real inference servers ran in two smoke runs, under the earlier rule (rounds of A and B, no twins), with
   docker on one machine with one GPU (`scripts/compare-local.sh`): the example's two images (vLLM v0.32.0 and
   v0.33.0) and model, one warm-up launch per side and 2 scored pairs, but not the example's settings (30 s per level
   instead of 60, `gpuMemoryUtilization` 0.1, `maxModelLen` 2048). The second run finished all 6 launches: each
@@ -706,13 +728,13 @@ it. Output tokens per second, over the whole level, is not timed per token.
   machine"). The first run, from before that second start existed, lost one of its four scored launches to the
   same check and ended partial. With 2 pairs no verdict was possible by design; the runs checked the harness, and
   their figures say nothing about the two releases. The Kubernetes backend has never started a real server.
-- Tokens per joule has been computed from real power samples in those two runs only, from nvidia-smi (2 samples a
-  second). It has never been computed from DCGM: that reader is tested only against hand-written answers in the
-  documented format (a Prometheus `query_range` matrix), and the DCGM label names it matches on (`exported_pod`,
-  `exported_namespace`, `pod`, `Hostname`) have not been checked against a real DCGM exporter. The 2-second DCGM
-  interval is set through ClusterPolicy fields the GPU Operator's CRD defines (`spec.dcgmExporter.env`,
-  `spec.dcgmExporter.serviceMonitor.interval`), but it has not been applied on a cluster: whether the cluster's
-  monitoring then keeps a sample every 2 seconds is unchecked.
+- Tokens per joule has been computed from real power samples in the two smoke runs only, from nvidia-smi (2 samples a
+  second); the three runs with twins measured no energy. It has never been computed from DCGM: that reader is tested
+  only against hand-written answers in the documented format (a Prometheus `query_range` matrix), and the DCGM label
+  names it matches on (`exported_pod`, `exported_namespace`, `pod`, `Hostname`) have not been checked against a real
+  DCGM exporter. The 2-second DCGM interval is set through ClusterPolicy fields the GPU Operator's CRD defines
+  (`spec.dcgmExporter.env`, `spec.dcgmExporter.serviceMonitor.interval`), but it has not been applied on a cluster:
+  whether the cluster's monitoring then keeps a sample every 2 seconds is unchecked.
 - No comparison has run on OpenShift yet, with or without a GPU. The runner's Job, with the chart's RBAC, has run on
   a plain Kubernetes cluster (kind) against GuideLLM's mock server: it scaled a stand-in server to 0 and back, wrote
   the status ConfigMap and the termination message, and, when its Job was deleted mid-launch, recorded the launch
@@ -723,19 +745,22 @@ it. Output tokens per second, over the whole level, is not timed per token.
   second run started during a run refused (exit 5) and changed nothing, and a runner stopped mid-launch saved the
   run as partial / `STOPPED` and started the stand-in live server again.
 - DCGM's answers are parsed under both the old and the new DCGM exporter metric names, in tests only.
-- No `ray-serve-llm` side has finished a scored launch, with or without `args`. The way the server turns `args`
-  into engine settings was run side by side against `vllm serve`'s own parser for vLLM 0.33.0, on 139 sets of
-  flags. Where both took a set, they gave the same setting, apart from the syntax in "Run a comparison",
-  `--reasoning-parser none` (which `vllm serve` turns into no parser and the server passes on as the text `none`)
-  and `--optimization-level 3` (the number 3 here, the text `3` from `vllm serve`; both are the same level once
-  vLLM reads them). The server took five sets that `vllm serve` refuses. One is `--no-disable-log-stats`:
-  `vllm serve` takes that flag only as `--disable-log-stats`, and the server's syntax takes `--no-` for every
-  boolean. The other four are values the server does not check: `--compilation-config 3`, an unknown key in
-  `--quantization-config`, a `--kv-transfer-config` that vLLM finds incomplete, and
-  `--cudagraph-capture-sizes=["a"]`. Building vLLM 0.33.0's engine config on CPU refused the first three of those
-  four and accepted the last; no engine was started. For vLLM 0.29.0, which this pattern's image pins, only the
-  engine arguments' declared types at that tag were read; nothing was run with it.
-- The length of a run, and so of the server's outage, is an estimate (about 4 to 6 hours for 34 server starts).
+- `ray-serve-llm` sides finished scored launches in the three runs with twins, with and without `args`
+  (`--attention-backend FLASHINFER`, and in one run also `--safetensors-load-strategy eager`), but their servers turned
+  `args` into engine settings with the earlier form above, not with the syntax and checks in "Run a comparison". The way
+  the server now turns `args` into engine settings was run side by side against `vllm serve`'s own parser for vLLM
+  0.33.0, on 139 sets of flags. Where both took a set, they gave the same setting, apart from the syntax in "Run a
+  comparison", `--reasoning-parser none` (which `vllm serve` turns into no parser and the server passes on as the text
+  `none`) and `--optimization-level 3` (the number 3 here, the text `3` from `vllm serve`; both are the same level once
+  vLLM reads them). The server took five sets that `vllm serve` refuses. One is `--no-disable-log-stats`: `vllm serve`
+  takes that flag only as `--disable-log-stats`, and the server's syntax takes `--no-` for every boolean. The other four
+  are values the server does not check: `--compilation-config 3`, an unknown key in `--quantization-config`, a
+  `--kv-transfer-config` that vLLM finds incomplete, and `--cudagraph-capture-sizes=["a"]`. Building vLLM 0.33.0's
+  engine config on CPU refused the first three of those four and accepted the last; no engine was started. For vLLM
+  0.29.0, which this pattern's image pins, only the engine arguments' declared types at that tag were read; nothing was
+  run with it.
+- The length of a run with the default settings, and so of the server's outage, is an estimate (about 4 to 6 hours
+  for 34 server starts). The runs with twins, with 5 s of load at one level, do not time it.
 
 ## Scale out
 

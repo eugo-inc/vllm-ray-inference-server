@@ -325,23 +325,37 @@ server). Checked with real servers, under docker on one GPU (`scripts/compare-lo
 and B only, no twins): two 2-pair smoke runs of the example's two vLLM images with smaller settings. The second
 finished all 6 launches, measured by GuideLLM, with tokens per joule from nvidia-smi, one of them after a second
 start past vLLM's start-up memory check (README, "On one machine"); the first, from before that second start, lost a
-launch to that check. The engine restart count (`logs.memory_check_restarts`) was run over 66 server logs of the
-pattern's Ray Serve LLM app on two images with vLLM 0.33 (0.33.0 and a development build of it; not the vLLM 0.29.0
-this image pins), from comparison launches under docker on one machine with one GPU whose memory is the machine's
-own: it gave 1 for each of the 7 logs in which one replica stopped at the check and a new one followed (in one of
-them a replica before that one had stopped for another reason, a KV cache too small for the model's length, and was
-not counted), and 0 for the other 59; those runs, from before this count, had `start_retries` 0 in every launch. The
-`ray-serve-start-*.log` fixtures are rebuilt from the line shapes of the 0.33.0 image's logs, with made-up process
-ids, replica ids, times, durations, memory figures and memory setting, apart from the model's weight size (0.93 GiB,
-the same in every one of those logs), the pattern's default model length (8192) and vLLM's own source line numbers;
-their only path and address are the pattern's ready file (`/tmp/r/rhvp-ready`) and listen address
-(`http://0.0.0.0:8000/`), and no line is a copy of a line of those logs.
-Not checked yet: the twin rule with any real server (it has run against fakes only); the Kubernetes backend with a
-real server; tokens per joule from DCGM (its reader is tested only against hand-written answers, and the DCGM label
-names it matches on have not been checked against a real DCGM exporter), and the 2 s DCGM interval on a cluster; a
-run on OpenShift, with or without a GPU (restricted SCC, internal registry, Argo CD health of the Job); the example's
-own settings; the length of a run (an estimate of about 4 to 6 hours with the defaults); a launch whose GuideLLM
-timed out and ran again, which only the fake backend of the unit tests has gone through; the engine restart count
+launch to that check. Checked with real servers under the twin rule, under docker on one machine with one GPU whose
+memory is the machine's own: three comparisons whose sides were both `ray-serve-llm` (this pattern's own server), on two
+images with vLLM 0.33 (0.33.0 and a development build of it; not the vLLM 0.29.0 this image pins) built for the test
+with Ray Serve LLM and this pattern's server files, each planned as 8 rounds with twins on both sides after one warm-up
+launch per side. Two finished all 8 rounds (34 launches each). A memory guard around the runner stopped the third
+(SIGTERM) in round 7: that launch is `STOPPED`, and the run was saved partial and analysed on its 6 finished rounds. No
+other launch failed, and `start_retries` was 0 in every launch. GuideLLM timed out in six launches across the three;
+each ran again from a new start (`load_retries` 1) and finished. Their settings: the example's model, already on the
+model volume; one load level, 5 s at 1 stream; `gpuMemoryUtilization` 0.12; `startup/first_answer_s` the only primary
+case; energy `none`; no `SERVER_CONTAINER`; cold compile caches. Their code: `notebooks/rhvp_compare` and
+`scripts/compare-local.sh` of commit `7ec0b75` (comments aside), and server files with an earlier, unmerged form of
+`serve_app.engine_flags` (each value read as YAML, nothing checked against `AsyncEngineArgs`); one run's sides started
+through a wrapper `command` that then runs the entrypoint, on the same images plus a test layer. The engine restart
+count (`logs.memory_check_restarts`) was run afterwards over the 66 server logs of two of those comparisons, the stopped
+one and one that finished (`*.try-1.*` logs included): it gave 1 for each of the 7 logs in which one replica stopped at
+the check and a new one followed (in one of them a replica before that one had stopped for another reason, a KV cache
+too small for the model's length, and was not counted), and 0 for the other 59. The `ray-serve-start-*.log` fixtures are
+rebuilt from the line shapes of the 0.33.0 image's logs, with made-up process ids, replica ids, times, durations, memory
+figures and memory setting, apart from the model's weight size (0.93 GiB, the same in every one of those logs), the
+pattern's default model length (8192) and vLLM's own source line numbers; their only path and address are the pattern's
+ready file (`/tmp/r/rhvp-ready`) and listen address (`http://0.0.0.0:8000/`), and no line is a copy of a line of those
+logs.
+Not checked yet: the twin rule with real servers beyond those three runs: with a `vllm-openai` or `custom` side, on the
+image `inference-server/` builds (vLLM 0.29.0), with the example's settings and default primary cases, with energy, with
+`SERVER_CONTAINER`, with a warm compile cache, with the current `serve_app.engine_flags` and the runner's later changes
+(`engine_restarts` among them), and on more than one machine, GPU or model; the Kubernetes backend with a real server;
+tokens per joule from DCGM (its reader is tested only against hand-written answers, and the DCGM label names it matches
+on have not been checked against a real DCGM exporter), and the 2 s DCGM interval on a cluster; a run on OpenShift, with
+or without a GPU (restricted SCC, internal registry, Argo CD health of the Job); the length of a run (an estimate of
+about 4 to 6 hours with the defaults; the runs above, with 5 s of load at one level, do not time it); a launch whose
+GuideLLM timed out again in its second try (`LOAD_FAILED`), which none of the runs above had; the engine restart count
 with vLLM 0.29.0 and on Kubernetes, which nothing has gone through yet, unit tests included (their logs have vLLM
 0.33.0's line shapes and their backend is a fake); and the engine restart count inside the second replica of mode
 `scaleout` and for a Ray Serve LLM server that exits once Ray Serve gives up after replicas stopped at the check (the
