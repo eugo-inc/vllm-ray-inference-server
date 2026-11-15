@@ -694,17 +694,21 @@ it. Output tokens per second, over the whole level, is not timed per token.
 ### What has not been checked
 
 - The rule with twins (rounds of A, A~same, B, B~same; the bar from the twins) has run with real servers in three
-  comparisons, all with docker on one machine with one GPU whose memory is the machine's own
-  (`scripts/compare-local.sh`). Each was planned as 8 rounds with a twin for both sides, after one warm-up launch per
-  side, and in each both sides used the `ray-serve-llm` preset: this pattern's own server. Two finished all 8 rounds (34
-  launches each). The third was stopped in round 7 by a script around the runner that stops a run when the machine's
-  free memory runs low: the runner recorded the launch it was in as `STOPPED`, saved the run as partial and analysed the
-  6 rounds it had finished. No other launch failed, and the runner started no server again (`start_retries` 0). In some
-  starts of two of the runs, vLLM's start-up memory check stopped an engine and Ray Serve started a new one inside the
-  same start, as "On one machine" describes; the server logs show it, but these runs came before the engine restart
-  count (`engine_restarts`) and their records do not have it. GuideLLM timed out in six launches across the three runs;
-  each of them ran again from a new start, as "What a run does" describes, and finished. These runs show that the
-  runner, the load and the rule work end to end with real servers; their figures are not reported here.
+  comparisons whose results are described here, all with docker on one machine with one GPU whose memory is the
+  machine's own (`scripts/compare-local.sh`). Each was planned as 8 rounds with a twin for both sides, after one warm-up
+  launch per side, and in each both sides used the `ray-serve-llm` preset: this pattern's own server. Two finished all 8
+  rounds (34 launches each). The third was stopped in round 7 by a script around the runner that stops a run when the
+  machine's free memory runs low: the runner recorded the launch it was in as `STOPPED`, saved the run as partial and
+  analysed the 6 rounds it had finished. No other launch failed, and the runner never had to start a server again after
+  vLLM's start-up memory check (`start_retries` 0). In some starts of two of the runs, vLLM's start-up memory check
+  stopped an engine and Ray Serve started a new one inside the same start, as "On one machine" describes; the server
+  logs show it, but these runs came before the engine restart count (`engine_restarts`) and their records do not have
+  it. GuideLLM timed out in six launches across the three runs; each of them ran again from a new start, as "What a run
+  does" describes, and finished. These runs show that the runner, the load and the rule work end to end with real
+  servers; their figures are not reported here. Not among the three: an earlier try of one of the two that finished,
+  with the same settings and comparison code, which finished its 2 warm-up and 15 scored launches before it was stopped
+  the same way in round 4 and was saved as partial, and other tries that were stopped in their first warm-up launch,
+  before any scored launch.
 - What those three runs leave unchecked. One machine, one GPU, docker only, and one model: the example's, already on the
   model volume, so the warm-up launches downloaded nothing. Not the default settings: one load level (1 stream for 5 s,
   64 prompt and 16 output tokens) instead of three 60-second levels, `gpuMemoryUtilization` 0.12, and
@@ -714,11 +718,15 @@ it. Output tokens per second, over the whole level, is not timed per token.
   vLLM 0.33 (0.33.0 and a development build of it), each with Ray Serve LLM and this pattern's server files; the 0.33.0
   one got Ray 2.60.0, with one import line in Ray changed for a vLLM module that moved in 0.33. The image the cluster
   builds from `inference-server/` (vLLM 0.29.0) has not run as a side. In one of the three runs both sides started
-  through a wrapper `command` that then ran the pattern's entrypoint, on the same images with a test layer added.
-  Earlier code: the comparison code (`notebooks/rhvp_compare`, `scripts/compare-local.sh`) of commit `7ec0b75`, comments
-  aside, and server files with an earlier form of the engine-flag handling, never merged, which read each value as YAML
-  and checked nothing against vLLM's engine arguments. The runner's later changes, such as the engine restart count
-  (`engine_restarts`) and the CUDA cache of a docker side with a warm compile cache, were not in them.
+  through a wrapper `command` that then ran the pattern's entrypoint, on the same images with a test layer added, which
+  on one side also changed how the server's processes read the model's weights: test code in those processes read every
+  page of the larger weight tensors before vLLM copied them. In that run the wrapper also recorded the page-cache state
+  of the model's files before each start, and a process outside the containers mapped the model's file and touched its
+  cached pages as each side started. Earlier code: the comparison code (`notebooks/rhvp_compare`,
+  `scripts/compare-local.sh`) of commit `7ec0b75`, comments aside, and server files with an earlier form of the
+  engine-flag handling, never merged, which read each value as YAML and checked nothing against vLLM's engine arguments.
+  The runner's later changes, such as the engine restart count (`engine_restarts`) and the CUDA cache of a docker side
+  with a warm compile cache, were not in them.
 - Before those, real inference servers ran in two smoke runs, under the earlier rule (rounds of A and B, no twins), with
   docker on one machine with one GPU (`scripts/compare-local.sh`): the example's two images (vLLM v0.32.0 and
   v0.33.0) and model, one warm-up launch per side and 2 scored pairs, but not the example's settings (30 s per level

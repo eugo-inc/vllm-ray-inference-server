@@ -338,16 +338,22 @@ level, 5 s at 1 stream; `gpuMemoryUtilization` 0.12; `startup/first_answer_s` th
 `SERVER_CONTAINER`; cold compile caches. Their code: `notebooks/rhvp_compare` and `scripts/compare-local.sh` of commit
 `7ec0b75` (comments aside), and server files with an earlier, unmerged form of `serve_app.engine_flags` (each value read
 as YAML, nothing checked against `AsyncEngineArgs`); one run's sides started through a wrapper `command` that then runs
-the entrypoint, on the same images plus a test layer. The engine restart count (`logs.memory_check_restarts`) was run
-afterwards over the 66 server logs of two of those comparisons, the stopped one and one that finished (`*.try-1.*` logs
-included): it gave 1 for each of the 7 logs in which one replica stopped at the check and a new one followed (in one of
-them a replica before that one had stopped for another reason, a KV cache too small for the model's length, and was not
-counted), and 0 for the other 59; over the 35 server logs of the other finished comparison it gave 0 for each. The
-`ray-serve-start-*.log` fixtures are rebuilt from the line shapes of the 0.33.0 image's logs, with made-up process ids,
-replica ids, times, durations, memory figures and memory setting, apart from the model's weight size (0.93 GiB, the same
-in every one of those logs), the pattern's default model length (8192) and vLLM's own source line numbers; their only
-path and address are the pattern's ready file (`/tmp/r/rhvp-ready`) and listen address (`http://0.0.0.0:8000/`), and no
-line is a copy of a line of those logs.
+the entrypoint, on the same images plus a test layer, which on one side also changed how the server's processes read the
+model's weights (test code in them read every page of the larger weight tensors before vLLM copied them); that run's
+wrapper also recorded the model files' page-cache state before each start, and a process outside the containers mapped
+the model's file and touched its cached pages as each side started. The engine restart count
+(`logs.memory_check_restarts`) was run afterwards over the 66 server logs of two of those comparisons, the stopped one
+and one that finished (`*.try-1.*` logs included): it gave 1 for each of the 7 logs in which one replica stopped at the
+check and a new one followed (in one of them a replica before that one had stopped for another reason, a KV cache too
+small for the model's length, and was not counted), and 0 for the other 59; over the 35 server logs of the other
+finished comparison it gave 0 for each. Not among the three comparisons: an earlier try of one of the two that finished,
+with the same settings and comparison code, finished 2 warm-up and 15 scored launches before a memory guard stopped it
+in round 4 (saved partial), and other tries were stopped in their first warm-up launch. The `ray-serve-start-*.log`
+fixtures are rebuilt from the line shapes of the 0.33.0 image's logs, with made-up process ids, replica ids, times,
+durations, memory figures and memory setting, apart from the model's weight size (0.93 GiB, the same in every one of
+those logs), the pattern's default model length (8192) and vLLM's own source line numbers; their only path and address
+are the pattern's ready file (`/tmp/r/rhvp-ready`) and listen address (`http://0.0.0.0:8000/`), and no line is a copy of
+a line of those logs.
 Not checked yet: the twin rule with real servers beyond those three runs: with a `vllm-openai` or `custom` side, on the
 image `inference-server/` builds (vLLM 0.29.0), with the example's settings and default primary cases, with energy, with
 `SERVER_CONTAINER`, with a warm compile cache, with the current `serve_app.engine_flags` and the runner's later changes
