@@ -94,6 +94,11 @@ LAUNCH_CODES = (GPU_NOT_FREE, SIDE_FAILED, SIDE_NEVER_READY, LOAD_FAILED, STOPPE
 #: (logs.memory_profiling_failed): the side, and in mode scaleout also the replica the forced step adds. Recorded in
 #: the launch's start_retries and in that server's record. A second such failure of the same start is SIDE_FAILED. A
 #: launch whose load runs again (LOAD_RETRIES) starts its servers anew, and each new start gets its own retry.
+#: The pattern's own Ray Serve LLM server does not exit when its engine stops at that check while other replicas can
+#: still be tried: Ray Serve starts another replica inside the same server start. The runner does not start such a
+#: server again; it counts those restarts from the server's log (logs.memory_check_restarts) in the launch's
+#: engine_restarts and in that server's record. A start-up figure includes the time of those inside the starts it is
+#: timed from: the side's, those of its last start; the added replica's, those of each of its starts.
 START_RETRIES = 1
 #: How many more times a launch runs after its GuideLLM timed out (LoadError.timed_out), so one stall of the load tool
 #: is not a failure of the side. The retry takes the side's servers down and starts the launch again (see the
@@ -458,7 +463,7 @@ class Runner:
                         "error": None, "error_code": None, "started_at": utc_now(), "finished_at": None,
                         "node": None, "image_digest": None, "server_version": None, "startup": None, "levels": [],
                         "values": {}, "artifacts": {}, "servers": [], "starts": 0, "start_retries": 0,
-                        "load_timeouts": 0, "load_retries": 0}
+                        "engine_restarts": 0, "load_timeouts": 0, "load_retries": 0}
         # Everything the launch has running, so the teardown takes it down whatever happened: the servers in start
         # order (`replicas`, the first replica first), GuideLLM in the background and the router (mode scaleout), and
         # a discard of a try that is not finished yet (`discard`, see _discard_try).
@@ -492,7 +497,7 @@ class Runner:
             for entry in reversed(held["replicas"]):  # the added replica first, the first replica last
                 if entry["replica"] == 1:
                     self._record_server(entry, spec, record)
-                    self._after(entry["handle"], record, out_dir, rel)
+                    self._after(entry, record, out_dir, rel)
                 else:
                     self._after_replica(entry, spec, record, out_dir, rel)
             record["servers"].sort(key=lambda item: (not item.get("discarded"), item["replica"]))  # tries in order
@@ -540,18 +545,19 @@ class Runner:
             return
 
     def _start(self, launch: Mapping, side: Mapping, spec: Mapping, record: dict, held: dict, replica: int,
-               retries: int) -> dict:
+               retries: int, earlier_restarts: int = 0) -> dict:
         """Start one server of the launch (replica 1, the side; replica 2, the one a scale launch adds) and hold it at
         once, so the teardown takes it down whatever happens next. It counts in the launch's `starts` once the
         platform has taken it, and a start again after vLLM's start-up memory check (`retries` 1) counts in
-        `start_retries`, with its note, only then too."""
+        `start_retries`, with its note, only then too. `earlier_restarts`: the engine restarts inside the stopped
+        start before this one (`_start_again`), already in the launch's count, kept for this server's record."""
         started_at, epoch = utc_now(), self.wall()
         if replica == 1:
             handle = self.backend.start(self.plan, launch, side, spec)
         else:
             handle = self.backend.start(self.plan, launch, side, spec, replica=replica)
         entry = {"replica": replica, "handle": handle, "started_at": started_at, "epoch": epoch,
-                 "start_retries": retries}
+                 "start_retries": retries, "engine_restarts": earlier_restarts}
         held["replicas"].append(entry)
         record["starts"] += 1
         if retries:  # only now has the server started again
@@ -570,12 +576,12 @@ class Runner:
         (START_RETRIES), and its start is timed from that start."""
         timeout = self.plan["server"]["warmup_timeout_s" if launch["kind"] == plans.WARMUP else "ready_timeout_s"]
         model = self.plan["model"]["id"]
-        retries = 0
+        retries, earlier = 0, 0
         while True:
             self.backend.gpu_free(self.plan, side)
             record["_started_epoch"] = self.wall()
             t0 = self.clock()
-            entry = self._start(launch, side, spec, record, held, 1, retries)
+            entry = self._start(launch, side, spec, record, held, 1, retries, earlier)
             handle = entry["handle"]
             deadline = t0 + timeout
             target = self.backend.endpoint(handle, deadline)
@@ -592,7 +598,7 @@ class Runner:
                 if (error.never_ready or retries >= START_RETRIES
                         or not self._start_again(entry, record, out_dir, rel, error, held)):
                     raise
-                retries += 1
+                retries, earlier = retries + 1, entry["engine_restarts"]
         record["startup"] = {"ready_s": round(ready_s, 3), "first_answer_s": round(first_s, 3),
                              "clock": "runner, from just before the server was asked for", "breakdown": []}
         record["values"].update({"startup/ready_s": ready_s, "startup/first_answer_s": first_s})
@@ -601,7 +607,8 @@ class Runner:
     def _start_again(self, entry: dict, record: dict, out_dir: Path, rel: str, error: Exception, held: dict) -> bool:
         """When the server's log shows vLLM's memory-profiling check failing: keep that log as
         server.attempt-<n>.log (server-2.attempt-<n>.log for the replica a scale launch adds), take that server down,
-        let go of it and return True (the launch starts it again). Anything else: False, and the launch fails."""
+        let go of it, count the engine restarts inside that start (`_count_engine_restarts`) and return True (the
+        launch starts it again). Anything else: False, and the launch fails."""
         handle, n = entry["handle"], entry["replica"]
         try:
             text = self.backend.logs(handle)
@@ -620,7 +627,28 @@ class Runner:
             f"and started once more ({name} is the log of the start that stopped)")
         self.backend.stop(handle)
         held["replicas"].remove(entry)  # torn down; the next start holds the new one
+        self._count_engine_restarts(entry, text, record, name, who)
         return True
+
+    def _count_engine_restarts(self, entry: dict, text: str, record: dict, log_name: str, who: str) -> None:
+        """Count, once per server start, the engine restarts its log shows (logs.memory_check_restarts: the pattern's
+        Ray Serve LLM server starting another replica after vLLM's start-up memory check stopped one, inside this
+        start): in the launch's `engine_restarts` and in this server's record (`entry["engine_restarts"]`, which
+        also carries those of a stopped start before this one), with a note naming the log."""
+        if entry.get("restarts_read"):
+            return
+        entry["restarts_read"] = True
+        found = logs.memory_check_restarts(text)
+        if not found:
+            return
+        entry["engine_restarts"] += found
+        record["engine_restarts"] += found
+        if entry.get("server_record") is not None:  # recorded before its log was read
+            entry["server_record"]["engine_restarts"] = entry["engine_restarts"]
+        times = "once" if found == 1 else f"{found} times"
+        record.setdefault("notes", []).append(
+            f"Ray Serve started the vLLM engine of {who} again {times} inside one start of its server, after vLLM's "
+            f"start-up memory check stopped it ({log_name})")
 
     # ---- the scale round (plan mode scaleout) ----
 
@@ -662,9 +690,9 @@ class Runner:
         t0 = self.clock()
         deadline = t0 + timeout
         model = self.plan["model"]["id"]
-        retries, asked_epoch = 0, None
+        retries, asked_epoch, earlier = 0, None, 0
         while True:  # a start that stops at vLLM's memory check is tried once more, and its time counts
-            entry = self._start(launch, side, spec, record, held, 2, retries)
+            entry = self._start(launch, side, spec, record, held, 2, retries, earlier)
             if asked_epoch is None:
                 asked_epoch = entry["epoch"]
                 record["scale"]["step_at_s"] = round(asked_epoch - surge_at, 3)
@@ -683,7 +711,7 @@ class Runner:
                 if (error.never_ready or retries >= START_RETRIES
                         or not self._start_again(entry, record, out_dir, rel, error, held)):
                     raise
-                retries += 1
+                retries, earlier = retries + 1, entry["engine_restarts"]
         surge_over = running.poll() is not None
         joined = router.add(target2) or {}
         joined_at = joined.get("joined_at") if isinstance(joined.get("joined_at"), (int, float)) else self.wall()
@@ -753,6 +781,7 @@ class Runner:
             new = (record.get("scale") or {}).get("new_replica")
             if new is not None:
                 new["breakdown"] = logs.breakdown(text, entry["epoch"])
+            self._count_engine_restarts(entry, text, record, f"server-{n}.log", f"replica {n}")
         except Exception as error:
             record.setdefault("notes", []).append(f"replica {n}'s log not read: {type(error).__name__}")
         try:
@@ -779,9 +808,11 @@ class Runner:
             entry["replica"], spec.get("command"), spec.get("args") or [], facts.get("env"), source,
             started_at=entry["started_at"], image_entrypoint=facts.get("image_entrypoint"),
             image_cmd=facts.get("image_cmd"), start_retries=entry.get("start_retries", 0),
+            engine_restarts=entry.get("engine_restarts", 0),
             gpus=facts.get("gpus") if isinstance(facts.get("gpus"), str) else None,
             gpu_uuids=facts.get("gpu_uuids") if isinstance(facts.get("gpu_uuids"), list) else None,
             discarded=discarded))
+        entry["server_record"] = record["servers"][-1]  # its engine_restarts follows the log, read after it
         entry["recorded"] = True
 
     # ---- a try discarded after a GuideLLM time-out ----
@@ -858,8 +889,11 @@ class Runner:
             stem, key = ("server", "server_log") if n == 1 else (f"server-{n}", f"server_log_{n}")
             name = f"{stem}.try-{tries}.log"
             try:
-                (out_dir / name).write_text(self.backend.logs(entry["handle"]), encoding="utf-8")
+                text = self.backend.logs(entry["handle"])
+                (out_dir / name).write_text(text, encoding="utf-8")
                 record["artifacts"][f"{key}_try_{tries}"] = f"{rel}/{name}"
+                self._count_engine_restarts(entry, text, record, name,
+                                            ("the side" if n == 1 else f"replica {n}") + " of that try")
             except Exception as read_error:
                 what = "the server log of that try" if n == 1 else f"the log of replica {n} of that try"
                 record.setdefault("notes", []).append(f"{what} not read: {type(read_error).__name__}")
@@ -941,15 +975,17 @@ class Runner:
                 result = energy.Power(None, result.samples, None, f"{result.note}; {note}")
             level["energy"] = energy.level_energy(level, result, sampler.source)
 
-    def _after(self, handle, record: dict, out_dir: Path, rel: str) -> None:
+    def _after(self, entry: dict, record: dict, out_dir: Path, rel: str) -> None:
         """Logs, facts and teardown of the side (in mode scaleout, its first replica), whatever happened in the
         launch."""
+        handle = entry["handle"]
         try:
             text = self.backend.logs(handle)
             (out_dir / "server.log").write_text(text, encoding="utf-8")
             record["artifacts"]["server_log"] = f"{rel}/server.log"
             if record.get("startup") is not None:
                 record["startup"]["breakdown"] = logs.breakdown(text, record.get("_started_epoch") or 0.0)
+            self._count_engine_restarts(entry, text, record, "server.log", "the side")
             version = record.get("_reported_version")
             source = "endpoint" if version else None
             if not version:

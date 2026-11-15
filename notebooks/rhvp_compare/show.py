@@ -171,6 +171,20 @@ def _retried(launch: dict, scale: bool) -> str:
     return words.RETRIED_SERVERS.format(index=index, side=side, starts=starts)
 
 
+def _engine_restarted(launch: dict, scale: bool) -> str:
+    """A launch whose Ray Serve LLM server started its engine again inside one start, with how many times: "3 (A, 1)";
+    in mode scaleout with the replicas when not only its first replica (of the kept try) did ("3 (A, 2; in replica 2,
+    replica 1 of the discarded try)"), from its server records."""
+    index, side, restarts = launch["index"], launch["side"], launch.get("engine_restarts")
+    restarted = [item for item in launch.get("servers") or [] if item.get("engine_restarts")]
+    if scale and (len(restarted) > 1 or (restarted and (restarted[0].get("replica") != 1
+                                                        or restarted[0].get("discarded")))):
+        replicas = ", ".join(words.RETRIED_REPLICA.format(replica=item.get("replica"))
+                             + (words.RETRIED_DISCARDED if item.get("discarded") else "") for item in restarted)
+        return words.ENGINE_RESTARTED_REPLICAS.format(index=index, side=side, restarts=restarts, replicas=replicas)
+    return words.ENGINE_RESTARTED_LAUNCH.format(index=index, side=side, restarts=restarts)
+
+
 def _head(results: dict | None, found: list[dict], problems: list[str]) -> list[str]:
     parts = []
     if _replay_path():
@@ -198,6 +212,9 @@ def _head(results: dict | None, found: list[dict], problems: list[str]) -> list[
     if retried:
         parts.append(line((words.RUN_RETRIED_SCALE if scale else words.RUN_RETRIED).format(
             launches=", ".join(retried))))
+    restarted = [_engine_restarted(r, scale) for r in launches if r.get("engine_restarts")]
+    if restarted:
+        parts.append(line(words.RUN_ENGINE_RESTARTED.format(launches=", ".join(restarted))))
     timed_out = [(words.LOAD_RETRIED_RAN if r.get("load_retries") else words.LOAD_RETRIED_NOT_KEPT
                   if summary.first_try_kept(r) else words.LOAD_RETRIED_NOT).format(
         index=r["index"], side=r["side"], code=r.get("error_code") or r.get("status")) for r in launches

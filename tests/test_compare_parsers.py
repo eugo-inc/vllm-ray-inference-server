@@ -192,6 +192,90 @@ def test_log_lines_without_time_and_with_colour():
     assert logs.server_version([(None, "nothing here")]) is None
 
 
+# ---- engine restarts inside one start of the pattern's Ray Serve LLM server ----
+#
+# The fixtures are rebuilt from the line shapes of stock vLLM 0.33.0 / Ray 2.60.0 server logs of the pattern's app on a
+# GPU whose memory is the machine's own. Process ids, replica ids, times, durations, memory figures and the memory
+# setting are made up, apart from the model's weight size (0.93 GiB, the same in every one of those logs), the pattern's
+# default model length (8192) and vLLM's own source line numbers; the only path and address are the pattern's ready file
+# (/tmp/r/rhvp-ready) and listen address (http://0.0.0.0:8000/); no line is a copy of a line of those logs. One start
+# with no restart, one where Ray Serve replaced the replica once after vLLM's start-up
+# memory check stopped it (the shape seen in those logs), and two put together from the same shapes: two such
+# replacements in a row, and a replica stopped at vLLM's KV-cache check (another error) before one stopped at the
+# memory check. Ray relays a late copy of a stopped replica's failure ("[repeated 2x across cluster]", under that
+# replica's prefix): in the first two it comes after the new replica's first line, as in most of those logs, and in
+# the last one before it, as in the others.
+
+def _ray_log(name: str) -> str:
+    return (FIXTURES / f"ray-serve-start-{name}.log").read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(("name", "restarts"), [("no-restart", 0), ("memory-check-restart", 1),
+                                                ("memory-check-restarts-2", 2), ("other-error-then-memory-check", 1)])
+def test_engine_restarts_after_the_memory_check_in_a_ray_serve_log(name, restarts):
+    text = _ray_log(name)
+    assert logs.memory_check_restarts(text) == restarts
+    assert logs.memory_profiling_failed(text) == (restarts > 0)
+    # The failure shows on several lines of one replica (Ray relays it again seconds later) and counts once.
+    if name == "memory-check-restart":
+        failing = [line for _, line in logs.lines(text) if logs.MEMORY_PROFILING_ERROR in line]
+        assert len(failing) == 4 and sum(1 for line in failing if logs.SERVE_REPLICA.match(line)) == 3
+
+
+def test_a_ray_serve_replica_stopped_at_the_memory_check_counts_only_when_another_replica_follows():
+    text = _ray_log("memory-check-restart")
+    stopped = text.index("the replica will be stopped.")
+    last = text[:text.index("\n", stopped) + 1]  # the server gave up there: no replica after it
+    assert logs.memory_profiling_failed(last) and logs.memory_check_restarts(last) == 0
+    # A replica of another deployment of the app starting after it is not a restart of the engine.
+    ingress = "2026-01-01T00:03:30Z \x1b[36m(ServeReplica:llm:OpenAiIngress pid=5000)\x1b[0m INFO starting\n"
+    assert logs.memory_check_restarts(last + ingress) == 0
+    # A replica on another node carries ", ip=..." in its prefix; it is the same replica.
+    remote = text.replace("pid=1520)", "pid=1520, ip=10.0.0.7)").replace("pid=2470)", "pid=2470, ip=10.0.0.8)")
+    assert logs.memory_check_restarts(remote) == 1
+
+
+@pytest.mark.parametrize(("name", "restarts", "late"), [("memory-check-restart", 1, True),
+                                                        ("memory-check-restarts-2", 2, True),
+                                                        ("other-error-then-memory-check", 1, False)])
+def test_a_stopped_ray_serve_replica_counts_from_its_first_line_that_shows_the_check_failing(name, restarts, late):
+    """Ray's late copy of a stopped replica's failure carries that replica's prefix. Where it comes after the new
+    replica's first line (`late`), a count keyed on the stopped replica's last failing line would miss the restart;
+    the replica is timed from its first such line, so it counts in both orders."""
+    parsed = [text for _, text in logs.lines(_ray_log(name))]
+    first: dict[tuple[str, str], int] = {}
+    for number, text in enumerate(parsed):
+        match = logs.SERVE_REPLICA.match(text)
+        if match:
+            first.setdefault((match.group("deployment"), match.group("pid")), number)
+    copies = [(number, logs.SERVE_REPLICA.match(text)) for number, text in enumerate(parsed)
+              if "across cluster]" in text and logs.MEMORY_PROFILING_ERROR in text]
+    assert len(copies) == restarts
+    for number, match in copies:
+        stopped = (match.group("deployment"), match.group("pid"))
+        new = min(at for replica, at in first.items() if replica[0] == stopped[0] and at > first[stopped])
+        assert (number > new) == late
+    assert logs.memory_check_restarts(_ray_log(name)) == restarts
+
+
+def test_a_vllm_serve_log_that_stops_at_the_memory_check_gives_no_engine_restart():
+    # `vllm serve` exits at the check (the runner's own start again counts it), and its lines have no replica prefix.
+    stopped = VLLM_LOG + ("2026-01-01T00:01:01Z (EngineCore pid=7) ERROR 01-01 00:01:01 [core.py:3] AssertionError: "
+                          "Error in memory profiling. Initial free memory 20.00 GiB, current free memory 21.25 GiB.\n")
+    assert logs.memory_profiling_failed(stopped) and logs.memory_check_restarts(stopped) == 0
+    assert logs.memory_check_restarts(VLLM_LOG) == 0 and logs.memory_check_restarts("") == 0
+
+
+def test_the_breakdown_of_a_restarted_ray_serve_start_adds_up_both_engine_starts():
+    steps = {entry["phase"]: entry for entry in logs.breakdown(_ray_log("memory-check-restart"),
+                                                               logs.parse_time("2026-01-01T00:00:00Z"))}
+    assert steps["weights_load"]["count"] == 2 and steps["weights_load"]["seconds"] == pytest.approx(142.8)
+    assert steps["engine_init"]["count"] == 1  # only the engine that came up finished its start
+    assert steps["ray_app_start"]["seconds"] == pytest.approx(353.1)  # Ray's own figure, both engine starts in it
+    # A moment is its first line in the log: "the engine starts" is the stopped engine's, not the serving one's.
+    assert steps["engine_start"]["at_s"] == pytest.approx(49.6)
+
+
 # ---- GPU power ----
 
 def test_nvidia_smi_samples():

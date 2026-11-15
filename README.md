@@ -516,10 +516,12 @@ the first try's files stay in the launch's folder as `*.try-1.*` and its notes a
 time-out fails the launch with `LOAD_FAILED`. The launch's `load_timeouts` counts its time-outs and `load_retries`
 says whether the load ran again (it stays 0 when the second load never began: the run was stopped, or the side
 could not be taken down or started again); `starts` counts the side's starts in the launch, both tries and any
-memory-check start included.
-Every time-out counts against its side, also when the launch then finished: `analysis.load_timeouts` gives the
-totals per side (twins included) and each comparison its own over its rounds, and `results.md` and the notebook
-say when one side timed out and the other did not, a difference the verdicts do not show.
+memory-check start included. `engine_restarts` counts the vLLM engines that the pattern's own Ray Serve LLM server
+started again by itself inside one of those starts after vLLM's start-up memory check stopped them, both tries
+included; they are not starts (see "On one machine"). Every time-out counts against its side, also when the launch
+then finished: `analysis.load_timeouts` gives the totals per side (twins included) and each comparison its own over
+its rounds, and `results.md` and the notebook say when one side timed out and the other did not, a difference the
+verdicts do not show.
 
 ### How the verdicts are decided
 
@@ -649,12 +651,28 @@ docker on one machine with an NVIDIA GPU, with GPU power sampled by `nvidia-smi`
   runs. `docker stop` on the runner container, or Ctrl-C, cuts the launch short and saves the run as partial.
 - Before each launch the runner waits until no other program uses the GPU (nvidia-smi, in the host's process
   namespace).
-- On a GPU whose memory is the machine's own, a vLLM server checks the free memory while it starts, and exits
-  (`Error in memory profiling`) when another program on the machine frees memory in those seconds. The runner then
-  starts that side once more in the same launch and times its start from the new start; the launch's
-  `start_retries`, `results.md` and the notebook say so. A second such exit of that start fails the launch
-  (`SIDE_FAILED`). The same measurement sets the size of the server's KV cache, so memory that other programs take
-  in those seconds shrinks it: in one launch of a smoke run a server got a small fraction of the KV cache the same
+- On a GPU whose memory is the machine's own, vLLM checks the free memory while its engine starts, and stops the
+  engine (`Error in memory profiling`) when another program on the machine frees memory in those seconds. A
+  `vllm-openai` side's server then exits. The runner starts that side once more in the same launch and times its
+  start from the new start; the launch's `start_retries`, `results.md` and the notebook say so. A second such exit of
+  that start fails the launch (`SIDE_FAILED`).
+- A `ray-serve-llm` side's server (this pattern's own) does not exit there: Ray Serve stops the replica whose engine
+  stopped and starts a new one inside the same start of the server. The runner sees no exit and starts nothing again,
+  so `start_retries` stays 0. It counts these restarts from the server's log instead, once it is done with that
+  server, in the launch's `engine_restarts` and in the server record's own; `results.md` and the notebook list them.
+  A Ray Serve replica counts once when its lines show `Error in memory profiling` and a new replica of the same
+  deployment starts (prints its first line) after the first of those lines, however many times Ray repeats the error,
+  also when a late copy of it comes after the new replica's first line. Not counted: a replica that stopped for any
+  other reason, and a last replica with none after it. If Ray Serve gives up on the deployment and the server exits
+  in its first start, the runner starts it once more whenever its log shows `Error in memory profiling` anywhere,
+  whatever the last replica stopped for (a KV cache too small for the model's length, say): `start_retries` and the
+  launch's note then count that exit as one at the memory check, and the replicas replaced before it still count in
+  `engine_restarts` (a path only the unit tests have gone through). The side's start-up figures are timed from the
+  server's last start, so they include the time of the engine starts that stopped inside it. The timed phases read
+  from `server.log` add up the lines of every engine start in it, the stopped ones' included, while a moment such as
+  the engine start is the first one in it, the stopped engine's.
+- The same measurement of free memory sets the size of the server's KV cache, so memory that other programs take in
+  those seconds shrinks it: in one launch of a smoke run a server got a small fraction of the KV cache the same
   image got in its other launches. Each launch's `server.log` has vLLM's `GPU KV cache size` line. Keep the machine as
   quiet as you can during a run.
 
@@ -881,7 +899,9 @@ Each scored launch, a twin's as well:
 5. times the second replica to its first answer, with the phases from its log, and counts its share of the requests.
    A second replica that exits at vLLM's start-up memory check is started once more, as a side is (see "On one
    machine"), and its time to first answer still counts from when it was first asked for, as an operator would see
-   it; its server record's `start_retries` says so;
+   it; its server record's `start_retries` says so. A `ray-serve-llm` second replica whose vLLM engine Ray Serve
+   started again inside its start does not exit; its server record's `engine_restarts` counts those, and its time to
+   first answer includes them, in each of its starts;
 6. reads GuideLLM's share of the requests that met the latency goals (`scaleOut.ttftMs` for the first token,
    `scaleOut.tpotMs` between tokens).
 

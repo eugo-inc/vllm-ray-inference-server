@@ -52,6 +52,19 @@ def _starts(launch: Mapping, scale: bool) -> str:
     return text
 
 
+def _engine_restarts(launch: Mapping, scale: bool) -> str:
+    """How many times a launch's Ray Serve LLM server started its engine again inside one start; in mode scaleout also
+    in which replicas, when not only the first replica of its kept try did (from its server records)."""
+    count = launch.get("engine_restarts")
+    text = "once" if count == 1 else f"{count} times"
+    restarted = [item for item in launch.get("servers") or [] if item.get("engine_restarts")]
+    if scale and (len(restarted) > 1 or (restarted and (restarted[0].get("replica") != 1
+                                                        or restarted[0].get("discarded")))):
+        text += " (" + ", ".join(f"replica {item.get('replica')}" + (" of the discarded try" if item.get("discarded")
+                                                                     else "") for item in restarted) + ")"
+    return text
+
+
 def markdown(results: Mapping) -> str:
     """The run's summary: what was compared, on what, how, and one row per case."""
     plan = results["plan"]
@@ -177,6 +190,14 @@ def markdown(results: Mapping) -> str:
                   "last start):"]
         lines += [f"- launch {r['index']} ({r['side']}): {_starts(r, bool(scale))}, "
                   f"then {'finished' if r.get('status') == 'ok' else r.get('error_code') or 'failed'}" for r in retried]
+    restarted = [r for r in launches if r.get("engine_restarts")]
+    if restarted:
+        lines += ["", "Launches whose Ray Serve LLM server started its vLLM engine again by itself after vLLM's "
+                  "start-up memory check stopped it, inside one start of the server (read from the server's log; not "
+                  "counted as starts of a server). A start-up figure includes the engine starts that stopped inside "
+                  "the starts it is timed from:"]
+        lines += [f"- launch {r['index']} ({r['side']}): engine started again {_engine_restarts(r, bool(scale))}"
+                  for r in restarted]
     timed_out = [r for r in launches if r.get("load_timeouts")]
     if timed_out:
         how = ("GuideLLM, the router and the replicas that had started were taken down, and the launch ran again "

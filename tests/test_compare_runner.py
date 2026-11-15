@@ -11,6 +11,7 @@ launch, a router and a background surge, on a clock that moves only when the run
 Run with: python -m pytest -q tests/test_compare_runner.py
 """
 
+import html
 import json
 import os
 import random
@@ -1292,10 +1293,13 @@ def test_a_start_that_fails_vllms_memory_check_is_tried_once_more(tmp_path):
     assert "Error in memory profiling" not in (the_runner.dir / l3["artifacts"]["server_log"]).read_text()
     assert any("started once more" in note for note in l3["notes"])
     assert all(x["start_retries"] == 0 for x in results["launches"] if x["index"] != 3)
+    # A vllm-openai side's log has no Ray Serve replica: its start again is start_retries only, never engine_restarts.
+    assert all(x["engine_restarts"] == 0 for x in results["launches"]) and l3["servers"][0]["engine_restarts"] == 0
     assert results["run"]["status"] == "complete" and runner.exit_code(results) == runner.EXIT_COMPLETE
-    assert "- launch 3 (A): started 2 times in all, then finished" in (the_runner.dir / "results.md").read_text()
+    text = (the_runner.dir / "results.md").read_text()
+    assert "- launch 3 (A): started 2 times in all, then finished" in text and "engine started again" not in text
     head = "".join(show._head(results, [], []))
-    assert "started again after vLLM" in head and "3 (A, 2)" in head
+    assert "started again after vLLM" in head and "3 (A, 2)" in head and "by itself" not in head
 
 
 def test_a_second_memory_check_failure_fails_the_launch(tmp_path):
@@ -1313,8 +1317,114 @@ def test_a_server_that_exits_for_another_reason_is_not_started_again(tmp_path):
     backend = FakeBackend(dies={3: 1}, dies_log="2026-01-01T00:00:01Z torch.OutOfMemoryError: CUDA out of memory\n")
     results, _, _ = run(tmp_path, backend)
     l3 = next(x for x in results["launches"] if x["index"] == 3)
-    assert (l3["status"], l3["error_code"], l3["start_retries"]) == ("failed", "SIDE_FAILED", 0)
+    assert (l3["status"], l3["error_code"], l3["start_retries"], l3["engine_restarts"]) == ("failed", "SIDE_FAILED",
+                                                                                              0, 0)
     assert backend.started.count((3, "A")) == 1 and "server_log_attempt_1" not in l3["artifacts"]
+
+
+#: Logs of the pattern's Ray Serve LLM server (tests/fixtures, see test_compare_parsers.py).
+RAY_RESTART = (FIXTURES / "ray-serve-start-memory-check-restart.log").read_text(encoding="utf-8")
+RAY_RESTARTS_2 = (FIXTURES / "ray-serve-start-memory-check-restarts-2.log").read_text(encoding="utf-8")
+RAY_NO_RESTART = (FIXTURES / "ray-serve-start-no-restart.log").read_text(encoding="utf-8")
+
+
+def _ray_gave_up_after(text: str, stops: int) -> str:
+    """`text` up to the line where Ray Serve stopped its `stops`-th replica: a server that exits there, with no replica
+    after the last one."""
+    at = -1
+    for _ in range(stops):
+        at = text.index("the replica will be stopped.", at + 1)
+    return text[:text.index("\n", at) + 1]
+
+
+class RayServeBackend(FakeBackend):
+    """The pattern's Ray Serve LLM server: `ray_logs` maps a launch index to the log of each of its starts that comes
+    up (a start that exits, `dies`, logs `dies_log`)."""
+
+    def __init__(self, ray_logs: dict | None = None, **kw):
+        super().__init__(**kw)
+        self.ray_logs = ray_logs or {}
+
+    def logs(self, handle):
+        if handle.get("dies"):
+            return self.dies_log
+        return self.ray_logs.get(handle["launch"]["index"], RAY_NO_RESTART)
+
+
+def test_engine_restarts_inside_a_ray_serve_start_are_counted_apart_from_starts_again(tmp_path):
+    """Launch 3's Ray Serve LLM server came up after Ray Serve replaced its replica twice, each stopped at vLLM's
+    memory check. The server never exited, so the runner did not start it again: start_retries and starts stay as
+    they were, and engine_restarts counts the two, in the launch, in its server record, in a note, in results.md and
+    in the notebook's head."""
+    backend = RayServeBackend(ray_logs={3: RAY_RESTARTS_2})
+    results, _, the_runner = run(tmp_path, backend)
+    jsonschema.validate(results, SCHEMA)
+    l3 = next(x for x in results["launches"] if x["index"] == 3)
+    assert (l3["status"], l3["starts"], l3["start_retries"], l3["engine_restarts"]) == ("ok", 1, 0, 2)
+    assert [(s["replica"], s["start_retries"], s["engine_restarts"]) for s in l3["servers"]] == [(1, 0, 2)]
+    assert backend.started.count((3, "A")) == 1
+    assert [n for n in l3["notes"] if "Ray Serve started" in n] == [
+        "Ray Serve started the vLLM engine of the side again 2 times inside one start of its server, after vLLM's "
+        "start-up memory check stopped it (server.log)"]
+    assert all(x["engine_restarts"] == 0 and x["start_retries"] == 0 for x in results["launches"] if x["index"] != 3)
+    assert results["run"]["status"] == "complete"
+    text = (the_runner.dir / "results.md").read_text()
+    assert "- launch 3 (A): engine started again 2 times" in text and "started 2 times in all" not in text
+    head = "".join(show._head(results, [], []))
+    assert html.escape(words.RUN_ENGINE_RESTARTED.format(launches="3 (A, 2)")) in head
+    assert words.RUN_RETRIED.split(",")[0] not in head
+
+
+def test_engine_restarts_of_a_ray_serve_start_that_exited_carry_over_to_its_start_again(tmp_path):
+    """Launch 3's first start: Ray Serve replaced the replica once, the next one stopped at the memory check too and
+    the server exited. The runner starts it again (start_retries 1) and that start came up after one more
+    replacement. engine_restarts counts both replacements; the last stop, which made the server exit, is the start
+    again."""
+    backend = RayServeBackend(dies={3: 1}, dies_log=_ray_gave_up_after(RAY_RESTARTS_2, 2), ray_logs={3: RAY_RESTART})
+    results, _, the_runner = run(tmp_path, backend)
+    jsonschema.validate(results, SCHEMA)
+    l3 = next(x for x in results["launches"] if x["index"] == 3)
+    assert (l3["status"], l3["starts"], l3["start_retries"], l3["engine_restarts"]) == ("ok", 2, 1, 2)
+    assert [(s["replica"], s["start_retries"], s["engine_restarts"]) for s in l3["servers"]] == [(1, 1, 2)]
+    notes = [n for n in l3["notes"] if "Ray Serve started" in n]
+    assert [n.rpartition("(")[2] for n in notes] == ["server.attempt-1.log)", "server.log)"]
+    assert all("again once inside one start" in n for n in notes)
+    text = (the_runner.dir / "results.md").read_text()
+    assert "- launch 3 (A): started 2 times in all, then finished" in text
+    assert "- launch 3 (A): engine started again 2 times" in text
+    head = "".join(show._head(results, [], []))
+    assert "3 (A, 2)" in head and html.escape(words.RUN_ENGINE_RESTARTED.format(launches="3 (A, 2)")) in head
+
+
+def test_engine_restarts_of_a_ray_serve_side_that_failed_are_still_counted(tmp_path):
+    """Launch 3's server exits in both starts, each after Ray Serve replaced one replica stopped at the memory check
+    and the next one stopped there too. The second exit fails the launch (SIDE_FAILED); the replacements inside both
+    starts still count, in the launch and in its server record."""
+    backend = RayServeBackend(dies={3: 2}, dies_log=_ray_gave_up_after(RAY_RESTARTS_2, 2))
+    results, _, the_runner = run(tmp_path, backend)
+    jsonschema.validate(results, SCHEMA)
+    l3 = next(x for x in results["launches"] if x["index"] == 3)
+    assert (l3["status"], l3["error_code"], l3["starts"], l3["start_retries"], l3["engine_restarts"]) == (
+        "failed", runner.SIDE_FAILED, 2, 1, 2)
+    assert [(s["replica"], s["start_retries"], s["engine_restarts"]) for s in l3["servers"]] == [(1, 1, 2)]
+    notes = [n for n in l3["notes"] if "Ray Serve started" in n]
+    assert [n.rpartition("(")[2] for n in notes] == ["server.attempt-1.log)", "server.log)"]
+    assert "- launch 3 (A): engine started again 2 times" in (the_runner.dir / "results.md").read_text()
+
+
+def test_engine_restarts_in_a_discarded_try_count_in_the_launch_and_its_record(tmp_path):
+    """Launch 3's GuideLLM timed out once, so its first try was discarded; both tries' servers came up after one
+    replacement each. Each server record keeps its own, and the launch has the sum."""
+    backend = RayServeBackend(hangs={3: 1}, ray_logs={3: RAY_RESTART})
+    results, _, the_runner = run(tmp_path, backend)
+    jsonschema.validate(results, SCHEMA)
+    l3 = next(x for x in results["launches"] if x["index"] == 3)
+    assert (l3["status"], l3["starts"], l3["start_retries"], l3["engine_restarts"]) == ("ok", 2, 0, 2)
+    assert [(s["discarded"], s["engine_restarts"]) for s in l3["servers"]] == [(True, 1), (False, 1)]
+    notes = [n for n in l3["notes"] if "Ray Serve started" in n]
+    assert [n.rpartition("(")[2] for n in notes] == ["server.try-1.log)", "server.log)"]
+    assert "the side of that try again once" in notes[0]
+    assert "- launch 3 (A): engine started again 2 times" in (the_runner.dir / "results.md").read_text()
 
 
 def test_launches_on_two_nodes_give_no_verdict(tmp_path):
@@ -1933,6 +2043,33 @@ def test_a_memory_check_retry_of_a_discarded_try_is_named_as_that_replica(tmp_pa
     assert ("- launch 3 (A): started 5 servers in all (replica 2 of the discarded try started again), then finished"
             in text)
     assert "3 (A, 5 servers; replica 2 of the discarded try started again)" in "".join(show._head(results, [], []))
+
+
+class RayRestartsInReplica2(ScaleBackend):
+    """The replica the forced step adds in launch 3 came up after Ray Serve replaced its engine once (vLLM's memory
+    check, inside that server's start)."""
+
+    def logs(self, handle):
+        if handle["launch"]["index"] == 3 and handle["replica"] == 2 and not handle["dies"]:
+            return RAY_RESTART
+        return super().logs(handle)
+
+
+def test_an_engine_restart_inside_the_added_replica_is_named_as_that_replica(tmp_path):
+    clock = FakeClock()
+    backend = RayRestartsInReplica2(clock)
+    results, the_runner = scale_run(tmp_path, backend, clock)
+    jsonschema.validate(results, SCHEMA)
+    l3 = results["launches"][2]
+    assert (l3["status"], l3["starts"], l3["start_retries"], l3["engine_restarts"]) == ("ok", 2, 0, 1)
+    assert _servers(l3, "start_retries", "engine_restarts") == [(1, 0, 0), (2, 0, 1)]
+    assert [n for n in l3["notes"] if "Ray Serve started" in n] == [
+        "Ray Serve started the vLLM engine of replica 2 again once inside one start of its server, after vLLM's "
+        "start-up memory check stopped it (server-2.log)"]
+    assert all(x["engine_restarts"] == 0 for x in results["launches"] if x["index"] != 3)
+    assert "- launch 3 (A): engine started again once (replica 2)" in (the_runner.dir / "results.md").read_text()
+    head = "".join(show._head(results, [], []))
+    assert html.escape(words.RUN_ENGINE_RESTARTED.format(launches="3 (A, 1; in replica 2)")) in head
 
 
 class DiesTwice(ScaleBackend):
