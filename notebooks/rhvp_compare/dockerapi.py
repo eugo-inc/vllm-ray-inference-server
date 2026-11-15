@@ -39,8 +39,10 @@ Settings (environment variables):
 
 A side with `compileCache: warm` gets its own volume at /cache for the whole run (`<prefix>-<last 8 characters of
 the run id>-<a or b>`) in place of the tmpfs, so its warm-up launch fills the compile caches its scored launches find
-(a twin's launches use its side's volume);
-the volumes are removed when the run ends. In mode scaleout both replicas of a launch share it.
+(a twin's launches use its side's volume), and CUDA_CACHE_PATH=/cache/cuda with CUDA_CACHE_MAXSIZE=4294967296 (4 GiB)
+for the CUDA driver's own kernel cache, as the server chart sets them for compileCache.mode node and shared
+(`WARM_CACHE_ENV`; a side's own env wins); the volumes are removed when the run ends. In mode scaleout both replicas
+of a launch share it.
 
 The scale round (mode scaleout): the second replica is a container named like the first plus `-2`; the router
 (router.py) and GuideLLM run as child processes of the runner, GuideLLM against the router. Where each replica runs is
@@ -82,6 +84,10 @@ RUNNER_LABEL = "rhvp-compare.runner"
 HELPER_MEMORY = 256 * 2**20
 #: Waits between the tries to start the server container again.
 RESTORE_BACKOFF_S = (2.0, 4.0, 8.0)
+#: What a side with compileCache warm gets besides its volume at /cache: the CUDA driver's own cache of the kernels it
+#: compiles from PTX, on that volume and up to 4 GiB (the driver's largest size), so later starts find them too. The
+#: same values the server chart sets when compileCache.mode is node or shared. A side's own env wins.
+WARM_CACHE_ENV = {"CUDA_CACHE_PATH": "/cache/cuda", "CUDA_CACHE_MAXSIZE": "4294967296"}
 
 
 def memory_bytes(text: str | None) -> int | None:
@@ -632,6 +638,8 @@ class DockerBackend:
         if cache:  # compileCache warm: the side's volume, kept for the run, in place of a fresh tmpfs
             binds.append(f"{cache}:/cache")
             del tmpfs["/cache"]
+            for key, value in WARM_CACHE_ENV.items():
+                env.setdefault(key, value)
         host = self._host({"NetworkMode": self.network, "Binds": binds, "ShmSize": self.shm, "Tmpfs": tmpfs})
         if self.memory:
             host.update({"Memory": self.memory, "MemorySwap": self.memory})  # no swap on top
