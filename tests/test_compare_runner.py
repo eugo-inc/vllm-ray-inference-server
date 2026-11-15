@@ -1737,7 +1737,9 @@ def test_a_surge_in_which_nothing_finished_gives_no_verdict(tmp_path):
     # Another reason (two nodes, a side that failed) can come before the 0, so this line names none; the table does.
     # A twin's 0 counts only in a round where its side has a figure, so the line says that too.
     assert "on side A or B it gives its case NO VERDICT" in text and "NO VERDICT (nonpositive_value):" not in text
-    assert "A twin's 0 in a round where its side has no figure is neither graded nor named:" in text
+    # The sentence ends there; the list of surges has its own lead-in, so it is not read as the ungraded twin zeros.
+    assert ("A twin's 0 in a round where its side has no figure is not graded, and the analysis does not name it."
+            "\n\nThe surges:\n- launch 5 (B): 0 requests failed, 0 succeeded") in text
     head = "".join(show._head(results, [], []))
     assert "launch 5 (B): 0 failed, 0 finished" in head
     assert "unless a reason the analysis checks first applies" in head and "(nonpositive_value)" not in head

@@ -218,7 +218,7 @@ def markdown(results: Mapping) -> str:
                       "ratio: on side A or B it gives its case NO VERDICT, and on a twin, in a round where its side "
                       "also has a figure, it gives NO VERDICT to every case whose noise floor uses that comparison "
                       "(in both, unless a reason the analysis checks first applies). A twin's 0 in a round where its "
-                      "side has no figure is neither graded nor named:"]
+                      "side has no figure is not graded, and the analysis does not name it.", "", "The surges:"]
         lines += [f"- launch {u['index']} ({u['side']}): {u['errored']} requests failed, {u['successful']} succeeded"
                   for u in surges]
     lost = [row for row in rows if any((row.get("lost") or {}).values())]

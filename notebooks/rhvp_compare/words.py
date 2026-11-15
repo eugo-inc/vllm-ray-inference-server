@@ -114,7 +114,8 @@ RUN_SURGES = ("Surges in which requests failed or none finished: {surges}. Only 
               "surge in which no request finished counts as 0 for both. A 0 gives no ratio: on side A or B it gives "
               "its case NO VERDICT, and on a twin, in a round where its side also has a figure, it gives NO VERDICT "
               "to every case whose noise floor uses that comparison (in both, unless a reason the analysis checks "
-              "first applies). A twin's 0 in a round where its side has no figure is neither graded nor named.")
+              "first applies). A twin's 0 in a round where its side has no figure is not graded, and the analysis "
+              "does not name it.")
 RUN_SURGE = "launch {index} ({side}): {errored} failed, {successful} finished"
 ENERGY_MIXED = ("Tokens per joule did not come from one method in every launch: {levels}. The energy counter needs as "
                 "many distinct readings in a level as energy.minSamples; otherwise the power samples give the mean.")
