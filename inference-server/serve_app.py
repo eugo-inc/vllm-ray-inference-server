@@ -306,11 +306,16 @@ def engine_flags(argv: List[str], types: Optional[Mapping[str, Any]] = None) -> 
             value = argv[i]
             i += 1
         key = name.replace("-", "_")
-        if key in ("hf_token", "no_hf_token"):  # before any message that would repeat the token
+        # Before any later message that would repeat the token. The name check above comes first and quotes an
+        # argument up to its first "=": a flag and its token given as one argument, "--hf-token <token>", whole.
+        if key in ("hf_token", "no_hf_token"):
             raise ConfigError("engine flag --hf-token: give a Hugging Face token as the HF_TOKEN variable instead")
-        # Messages name the flag. Only these quote what was given: a value of the wrong kind, a value with no flag
-        # before it (or a short flag), and None, '' or null. A refusal by name never does, nor a --no- flag with a
-        # value: that is checked before the name, so --no-api-key=<key> would otherwise put a key in the log.
+        # Messages name the flag. Of this function's messages, only these quote what was given: a value of the wrong
+        # kind, and None, '' or null; a value with no flag before it, or a short flag (the whole argument); and a name
+        # the check above refuses (the argument up to its first "=", so "--api-key <key>" given as one argument is
+        # quoted whole). The others never do, nor does a --no- flag with a value: that is checked before the name, so
+        # --no-api-key=<key> would otherwise put a key in the log. Some of load_config's later checks quote the value
+        # too: distributed_executor_backend, a revision that disagrees with model_revision, and the range checks.
         flag = f"--{name}"
         negated = key.startswith("no_")
         if negated:
