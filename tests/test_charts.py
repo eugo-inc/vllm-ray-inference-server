@@ -8,6 +8,7 @@ reached. The server chart's own tests are in test_server_chart.py.
 
 from __future__ import annotations
 
+import base64
 import importlib.util
 import json
 import os
@@ -492,6 +493,8 @@ KEDA_KINDS = {"ScaledObject", "TriggerAuthentication", "ServiceMonitor"}
 SERVER_VALUES = yaml.safe_load((REPO / "charts/all/ray-serve-llm/values.yaml").read_text())
 PAUSE_RULE = {"group": "keda.sh", "kind": "ScaledObject", "name": "ray-serve-llm",
               "jqPathExpressions": ['.metadata.annotations["autoscaling.keda.sh/paused-replicas"]']}
+TOKEN_SECRET = "ray-serve-llm-metrics-token"
+TOKEN_RULE = {"kind": "Secret", "name": TOKEN_SECRET, "namespace": "vllm-inference", "jsonPointers": ["/data/token"]}
 
 
 @pytest.fixture(scope="module")
@@ -504,6 +507,7 @@ def test_scale_out_is_off_by_default(server, cg):
     assert not kinds(server) & KEDA_KINDS
     assert not [d for d in server if d["kind"] in ("ServiceAccount", "Role") and d["metadata"]["name"] in (
         "thanos", "thanos-metrics-reader", "keda-operator-token-creator")]
+    assert not [d for d in server if d["kind"] == "Secret" and d["metadata"]["name"] == TOKEN_SECRET]
     apps = {d["metadata"]["name"] for d in cg["default"] if d["kind"] == "Application"}
     assert "keda-config" not in apps
     assert not [d for d in cg["default"] if "keda" in json.dumps(d.get("metadata", {}))]
@@ -569,13 +573,43 @@ def test_keda_service_monitor_scrapes_the_metrics_port(keda):
     svc = one(items, "Service", "ray-serve-llm")
     assert monitor["spec"]["selector"] == {"matchLabels": {"app.kubernetes.io/name": "ray-serve-llm"}}
     assert svc["metadata"]["labels"]["app.kubernetes.io/name"] == "ray-serve-llm"
-    assert monitor["spec"]["endpoints"] == [{"port": "metrics", "path": "/metrics", "interval": "15s"}]
+    assert monitor["spec"]["endpoints"] == [{
+        "port": "metrics", "path": "/metrics", "interval": "15s",
+        "authorization": {"type": "Bearer", "credentials": {"name": TOKEN_SECRET, "key": "token"}}}]
     # The Service and the server container carry the port the ServiceMonitor names (server.metricsPort).
     port = SERVER_VALUES["server"]["metricsPort"]
     [svc_port] = [p for p in svc["spec"]["ports"] if p["name"] == "metrics"]
     assert svc_port["port"] == port and svc_port["targetPort"] in ("metrics", port)
     ports = container(one(items, "Deployment", "ray-serve-llm"), "server")["ports"]
     assert {"name": "metrics", "containerPort": port} in [{k: p[k] for k in ("name", "containerPort")} for p in ports]
+
+
+def test_keda_scrape_and_server_share_one_token(keda, render):
+    # A Ray build with token authentication on for its metrics endpoint answers 401 to a scrape without the cluster's
+    # token: the ServiceMonitor sends the token from the Secret the server reads as its own Ray token.
+    items = keda["ray-serve-llm"]
+    secret = one(items, "Secret", TOKEN_SECRET)
+    assert secret["type"] == "Opaque" and set(secret["data"]) == {"token"}
+    assert secret["metadata"]["labels"]["app.kubernetes.io/name"] == "ray-serve-llm"
+    token = base64.b64decode(secret["data"]["token"]).decode()
+    assert re.fullmatch(r"[A-Za-z0-9]{64}", token)  # one line, no whitespace: Ray reads the file's first line
+    [endpoint] = one(items, "ServiceMonitor", "ray-serve-llm")["spec"]["endpoints"]
+    creds = endpoint["authorization"]["credentials"]
+    deploy = one(items, "Deployment", "ray-serve-llm")
+    c = container(deploy, "server")
+    vols = {v["name"]: v for v in deploy["spec"]["template"]["spec"]["volumes"]}
+    [mount] = [m for m in c["volumeMounts"] if m["name"] == "ray-auth"]
+    assert mount["readOnly"] is True
+    # Not optional: a server that started without the file would stop at start or hold another token.
+    assert vols["ray-auth"]["secret"] == {"secretName": creds["name"],
+                                          "items": [{"key": creds["key"], "path": "token"}]}
+    assert env_map(c)["RAY_AUTH_TOKEN_PATH"] == mount["mountPath"] + "/token"
+    # Neither RAY_AUTH_TOKEN (which Ray reads before the path) nor a switch that changes the build's own auth mode.
+    assert not {"RAY_AUTH_TOKEN", "RAY_AUTH_MODE", "RAY_AUTH_SKIP_METRICS"} & set(env_map(c))
+    # The token is random on every render, so it must be only in the Secret: a checksum or a copy of it in the pod
+    # template would roll the server on every sync.
+    assert (render / "charts/ray-serve-llm-keda.yaml").read_text().count(secret["data"]["token"]) == 1
+    assert token not in (render / "charts/ray-serve-llm-keda.yaml").read_text()
 
 
 def test_keda_checks_its_own_settings(render):
@@ -610,18 +644,24 @@ def test_keda_install(cg, keda):
         "SkipDryRunOnMissingResource=true")
 
 
-def test_keda_ignore_rules_restate_the_default(cg):
+def test_keda_ignore_rules_restate_the_default(cg, keda):
     # A list in a later values file replaces the earlier one: the keda override restates the server app's rules and
-    # adds the autoscaler's pause, which the comparison's runner sets and removes during a run.
+    # adds the autoscaler's pause, which the comparison's runner sets and removes during a run, and the metrics token,
+    # which is random on every render and must keep the value Argo CD first created.
     def server_app(case):
         return one([d for d in cg[case] if d["kind"] == "Application"], "Application", "ray-serve-llm")["spec"]
 
     default, keda_app = server_app("default"), server_app("keda")
-    assert keda_app["ignoreDifferences"] == default["ignoreDifferences"] + [PAUSE_RULE]
+    assert keda_app["ignoreDifferences"] == default["ignoreDifferences"] + [PAUSE_RULE, TOKEN_RULE]
     assert keda_app["syncPolicy"] == default["syncPolicy"]
     assert "RespectIgnoreDifferences=true" in keda_app["syncPolicy"]["syncOptions"]
+    assert keda_app["destination"]["namespace"] == TOKEN_RULE["namespace"]
+    # The rule names the Secret and the one data key the chart renders.
+    assert [f"/data/{key}" for key in one(keda["ray-serve-llm"], "Secret", TOKEN_SECRET)["data"]] == (
+        TOKEN_RULE["jsonPointers"])
     for case in ("default", "none", "gcp"):
         assert PAUSE_RULE not in server_app(case)["ignoreDifferences"]
+        assert TOKEN_RULE not in server_app(case)["ignoreDifferences"]
 
 
 # ---- rebuild-on-commit decisions (no cluster: pure function) -------------------------------

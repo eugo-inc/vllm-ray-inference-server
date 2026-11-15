@@ -4,6 +4,11 @@
 # (server.metricsPort). The autoscaler (scaledobject.yaml) reads vLLM's
 # waiting-request gauge from there. Monitoring for user-defined projects must be
 # enabled on the cluster; this pattern does not change that setting.
+#
+# Each scrape carries Ray's cluster token from Secret ray-serve-llm-metrics-token
+# (metrics-token.yaml), the token the server itself starts with, so a Ray build
+# with token authentication on for its metrics endpoint answers it too. The
+# pattern's Ray release does not check a token on that port and ignores it.
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
@@ -18,4 +23,9 @@ spec:
     - port: metrics
       path: /metrics
       interval: 15s
+      authorization:
+        type: Bearer
+        credentials:
+          name: ray-serve-llm-metrics-token
+          key: token
 {{- end }}

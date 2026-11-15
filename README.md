@@ -839,9 +839,11 @@ What you can see:
   one line per deployment, such as `LLMServer:qwen2_5-0_5b-instruct: running 2, target 2`.
 - The pod stays Ready while a replica is added or removed.
 - Ray's Prometheus metrics, vLLM's among them as `ray_vllm_*`, are served on port 8080 in every install
-  (`server.metricsPort`), on all of the pod's addresses: any pod in the cluster can read them at the pod's IP, without
-  authentication, as it can reach the API on port 8000. Only keda mode declares the port on the pod, adds it to the
-  Service and scrapes it with a ServiceMonitor.
+  (`server.metricsPort`), on all of the pod's addresses. The pattern's Ray release (2.60.0) checks no token on that
+  port: any pod in the cluster can read the metrics at the pod's IP, as it can reach the API on port 8000. A Ray
+  build with token authentication on for its metrics endpoint answers 401 there to a request without the Ray
+  cluster's token. Only keda mode declares the port on the pod, adds it to the Service and scrapes it with a
+  ServiceMonitor, which sends that token ("Across pods", below).
 
 A server image built before scale out existed ignores the new settings (it logs a warning for each), so its replica
 count never grows and it writes no `rhvp-scale` lines. After the push, the rebuild job builds a new image.
@@ -854,12 +856,25 @@ and removes them after a cooldown. Ray Serve and vLLM inside each pod stay as th
 - the operator `openshift-custom-metrics-autoscaler-operator` (channel `stable`, from `redhat-operators`) in
   namespace `openshift-keda`, and the app `keda-config` with its KedaController `keda`;
 - in `vllm-inference`: a ScaledObject `ray-serve-llm` that scales Deployment `ray-serve-llm` between
-  `scaleOut.minPods` (1) and `scaleOut.maxPods` (2), a ServiceMonitor that scrapes the server's metrics port, and the
-  ServiceAccount, Roles and TriggerAuthentication with which the autoscaler reads the cluster's monitoring.
+  `scaleOut.minPods` (1) and `scaleOut.maxPods` (2), a ServiceMonitor that scrapes the server's metrics port, the
+  ServiceAccount, Roles and TriggerAuthentication with which the autoscaler reads the cluster's monitoring, and a
+  Secret `ray-serve-llm-metrics-token` with the token for Ray that the scrape carries (below).
 
 The signal is vLLM's count of waiting requests, `ray_vllm_num_requests_waiting`, summed over the server pods and
 read from the cluster monitoring's Thanos Querier. A pod is added while more than `scaleOut.waitingRequestsPerPod`
 (4) requests wait per pod. The settings are under `scaleOut` in `charts/all/ray-serve-llm/values.yaml`.
+
+The scrape carries a token. In keda mode the server starts Ray with the token in Secret `ray-serve-llm-metrics-token`
+(a file mounted at `/etc/ray-auth/token`, named by `RAY_AUTH_TOKEN_PATH`), and the ServiceMonitor sends the same token
+as `Authorization: Bearer <token>`. A Ray build with token authentication on for its metrics endpoint refuses a scrape
+without it (401): Prometheus would store nothing, and the server would never scale out. The pattern's Ray release
+does not check a token on that port; it uses this one as the token of the Ray cluster it starts, in place of one it
+would make itself. The chart makes the token, 64 random letters and digits, when Argo CD first creates the Secret, and
+Argo CD keeps that value on later syncs. It is the token of the whole Ray cluster in each server pod, not a token for
+metrics only, and the cluster's monitoring keeps a copy in its scrape configuration. Ray reads it only when it starts.
+To change it, put a new value in the Secret's `token` key, then delete the server pods
+(`oc delete pod -l app.kubernetes.io/name=ray-serve-llm -n vllm-inference`); until they restart, a Ray build that
+checks the token refuses the scrape (403). If the Secret is missing, a new server pod waits for it and does not start.
 
 Before you turn it on:
 
@@ -906,8 +921,9 @@ oc scale deployment/ray-serve-llm --replicas=1 -n vllm-inference
 
 The last command is needed because the Deployment keeps the pod count the autoscaler last set. What else stays is
 harmless, and you can delete it when you no longer want it: ServiceAccount `thanos` and its Roles
-`thanos-metrics-reader` and `keda-operator-token-creator` in `vllm-inference`, the Argo CD application `keda-config`,
-and the operator with its namespace `openshift-keda`.
+`thanos-metrics-reader` and `keda-operator-token-creator` and Secret `ray-serve-llm-metrics-token` in
+`vllm-inference`, the Argo CD application `keda-config`, and the operator with its namespace `openshift-keda`. Delete
+that Secret only once the sync has replaced the server pod, which it does because the pod no longer mounts it.
 
 The image comparison pauses the autoscaler for its run (the annotation `autoscaling.keda.sh/paused-replicas: "0"` on
 the ScaledObject), and removes the pause when the run ends.
@@ -1049,13 +1065,14 @@ and twin and gets NO VERDICT (`zero_floor`): the run checks the harness, not a r
   then 2 running replicas, the app stayed RUNNING, the ready file stayed, every request was answered, and
   `rhvp_status.py` printed the counts. The deployment names of a real app, the shared-GPU placement and the GPU check
   at start have not run.
-- Keda mode has not run on OpenShift: not the operator install, the KedaController that the operator and Argo CD
-  both manage, the trust in the Thanos Querier's certificate, the ServiceMonitor, the labels of the real metric, the
-  Argo CD rule that keeps the pause annotation, or GPU time-slicing. Its objects were checked on a plain Kubernetes
-  cluster (kind) with upstream KEDA 2.19 and stand-ins for the metric and the server: the ScaledObject took the
-  Deployment from 1 to 2 pods when the waiting count rose, the pause held it at 0 for a minute, and removing the
-  pause brought back 1 pod. Through a Service, a new pod got none of the requests of a client with open connections;
-  through the router, it got a share.
+- Keda mode has not run on OpenShift: not the operator install, the KedaController that the operator and Argo CD both
+  manage, the trust in the Thanos Querier's certificate, the ServiceMonitor, the labels of the real metric, the Argo
+  CD rule that keeps the pause annotation, the metrics token (that the cluster's monitoring reads Secret
+  `ray-serve-llm-metrics-token` and sends it, and that Argo CD keeps its first value), or GPU time-slicing. Its
+  objects were checked on a plain Kubernetes cluster (kind) with upstream KEDA 2.19 and stand-ins for the metric and
+  the server: the ScaledObject took the Deployment from 1 to 2 pods when the waiting count rose, the pause held it at
+  0 for a minute, and removing the pause brought back 1 pod. Through a Service, a new pod got none of the requests of
+  a client with open connections; through the router, it got a share.
 - No server pod has yet been seen exporting `ray_vllm_num_requests_waiting` under that name on its metrics port. If
   the name or its labels differ, the query answers nothing, KEDA reads that as 0, and the server never scales.
 - `compileCache.mode` `node` and `shared` have not run on OpenShift.

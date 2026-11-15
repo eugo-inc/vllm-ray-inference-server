@@ -100,6 +100,12 @@ spec:
             {{- end }}
             - name: RAY_TMPDIR
               value: /tmp/r
+            {{- if eq (toString (.Values.global.scaleOut | default dict).mode) "keda" }}
+            # Ray's cluster token, the one the ServiceMonitor scrapes the metrics port with
+            # (metrics-token.yaml). Ray reads it once, when it starts.
+            - name: RAY_AUTH_TOKEN_PATH
+              value: /etc/ray-auth/token
+            {{- end }}
             - name: HF_TOKEN
               valueFrom:
                 secretKeyRef:
@@ -157,6 +163,11 @@ spec:
               mountPath: /tmp/r
             - name: dshm
               mountPath: /dev/shm
+            {{- if eq (toString (.Values.global.scaleOut | default dict).mode) "keda" }}
+            - name: ray-auth
+              mountPath: /etc/ray-auth
+              readOnly: true
+            {{- end }}
       volumes:
         - name: config
           configMap:
@@ -181,3 +192,14 @@ spec:
           emptyDir:
             medium: Memory
             sizeLimit: {{ .Values.server.shmSizeLimit }}
+        {{- if eq (toString (.Values.global.scaleOut | default dict).mode) "keda" }}
+        # Not optional: with RAY_AUTH_TOKEN_PATH set and no file, Ray stops at start, and
+        # a server with another token would refuse the ServiceMonitor's scrape. The pod
+        # waits until the Secret exists.
+        - name: ray-auth
+          secret:
+            secretName: ray-serve-llm-metrics-token
+            items:
+              - key: token
+                path: token
+        {{- end }}

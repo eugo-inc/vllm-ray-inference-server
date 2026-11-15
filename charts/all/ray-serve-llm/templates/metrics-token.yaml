@@ -1,0 +1,26 @@
+{{- if eq (toString (.Values.global.scaleOut | default dict).mode) "keda" }}
+# Ray's cluster token, shared by the two ends of the metrics scrape in keda mode:
+# the server reads it as its Ray token (RAY_AUTH_TOKEN_PATH, deployment.yaml), and
+# the ServiceMonitor sends it as "Authorization: Bearer <token>"
+# (servicemonitor.yaml). A Ray build with token authentication on for its metrics
+# endpoint answers 401 to a scrape without it; the pattern's Ray release does not
+# check a token on that port and ignores the header. It is the token of the whole
+# Ray cluster in the pod, not one for metrics only.
+#
+# Generated once, when Argo CD first creates the Secret; the ray-serve-llm app
+# ignores /data/token (overrides/values-scaleout-keda.yaml), so later renders do
+# not replace it, as the notebook app does for its cookie secret. Helm's lookup
+# could not keep it: Argo CD renders the chart without access to the cluster,
+# where lookup finds nothing. The value changes on every render, so nothing else
+# may carry it or a checksum of it, or the server would roll on every sync. Ray
+# reads the token only when it starts: after changing it, delete the server pods.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ray-serve-llm-metrics-token
+  labels:
+    {{- include "ray-serve-llm.labels" . | nindent 4 }}
+type: Opaque
+data:
+  token: {{ randAlphaNum 64 | b64enc | quote }}
+{{- end }}

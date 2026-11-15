@@ -65,7 +65,8 @@ one, change it everywhere and run the tests.
 | Replica count log line | one JSON line `{"event":"rhvp-scale",...}` per change (`inference-server/rhvp_scale.py` defines it; `notebooks/rhvp_compare/logs.py` keeps its own copy of the names); deployments as Ray Serve LLM names them, `LLMServer:<model id, "/" as "--" and "." as "_">` and `OpenAiIngress` |
 | Compile cache volume | PVC `ray-serve-llm-compile-cache` at `/cache` while `compileCache.mode` is `node` (ReadWriteOnce) or `shared` (ReadWriteMany); `none` keeps the emptyDir |
 | Autoscaler install (keda mode) | namespace `openshift-keda` (OperatorGroup for all namespaces, labelled `openshift.io/cluster-monitoring: "true"`), Subscription key `keda` for package `openshift-custom-metrics-autoscaler-operator` (channel `stable`), app `keda-config` (`charts/all/keda-config`) with KedaController `keda`; all in `overrides/values-scaleout-keda.yaml`, which `sharedValueFiles` includes as `/overrides/values-scaleout-<global.scaleOut.mode>.yaml` |
-| Autoscaler objects (keda mode) | in `vllm-inference`: ScaledObject `ray-serve-llm` (on Deployment `ray-serve-llm`), TriggerAuthentication `keda-trigger-auth-prometheus`, ServiceAccount `thanos`, Roles and RoleBindings `thanos-metrics-reader` and `keda-operator-token-creator` (for ServiceAccount `openshift-keda/keda-operator`), ServiceMonitor `ray-serve-llm` (port `metrics`) |
+| Autoscaler objects (keda mode) | in `vllm-inference`: ScaledObject `ray-serve-llm` (on Deployment `ray-serve-llm`), TriggerAuthentication `keda-trigger-auth-prometheus`, ServiceAccount `thanos`, Roles and RoleBindings `thanos-metrics-reader` and `keda-operator-token-creator` (for ServiceAccount `openshift-keda/keda-operator`), ServiceMonitor `ray-serve-llm` (port `metrics`, bearer token from Secret `ray-serve-llm-metrics-token`, key `token`) |
+| Metrics token (keda mode) | Secret `ray-serve-llm-metrics-token`, key `token` (`templates/metrics-token.yaml`): Ray's cluster token, mounted read-only in the server container at `/etc/ray-auth/token` (volume `ray-auth`, named by `RAY_AUTH_TOKEN_PATH`) and sent by ServiceMonitor `ray-serve-llm`; Argo CD ignores its `/data/token` (`overrides/values-scaleout-keda.yaml`) |
 | Autoscaler pause | annotation `autoscaling.keda.sh/paused-replicas: "0"` on ScaledObject `ray-serve-llm`, set by the comparison's runner (env `RHVP_COMPARE_SERVER_SCALED_OBJECT`, from `compare.serverScaledObject` in the notebook chart) and ignored by Argo CD (`overrides/values-scaleout-keda.yaml`) |
 | GPU time-slicing | ConfigMap `time-slicing-config` (key `any`) in `nvidia-gpu-operator`, named by the ClusterPolicy's `devicePlugin.config` only while `timeSlicing.enabled` is true |
 | Comparison with docker, scale-out mode | second replica container `<first replica's name>-2` (a twin's: `rhvp-cmp-<id>-<NN>-a-same-2`); warm compile-cache volumes `<CACHE_VOLUME>-<last 8 characters of the run id>-<a or b>`; per scored launch `server-2.log` (artifact `server_log_2`) and `router.log`; env `RHVP_COMPARE_REPLICA_GPUS`, `RHVP_COMPARE_CPUSET`, `RHVP_COMPARE_CACHE_VOLUME` (from `REPLICA_GPUS`, `CPUSET`, `CACHE_VOLUME` in `scripts/compare-local.sh`); helper containers `rhvp-cmp-<last 8 characters of the run id>-gpu-probe-<1 or 2>` and `...-gpu-mig-<1 or 2>` (nvidia-smi, before the first launch); server-record fields `gpus` and `gpu_uuids` (in each launch's `servers`, `$defs/server`) |
@@ -81,6 +82,7 @@ variants/prod/values-prod.yaml   the cluster group: namespaces, operator subscri
 overrides/values-gpu-machineset-create-AWS.yaml   create-gpu-machineset imperative job and its RBAC
 overrides/values-scaleout-keda.yaml   keda mode: the Custom Metrics Autoscaler's namespace, Subscription and app,
                                       and the ray-serve-llm app's ignore rules restated with the pause annotation
+                                      and the metrics token's data
 ansible/rebuild-on-commit.yaml   imperative job: start a build when that build's source folder changed
 ansible/rebuild_on_commit.py     the rebuild decision (which BuildConfigs to start), tested in tests/test_charts.py
 charts/all/nfd-config/         NodeFeatureDiscovery instance
@@ -88,9 +90,9 @@ charts/all/nvidia-gpu-config/  NVIDIA ClusterPolicy (tolerates the nvidia.com/gp
                                while the comparison is on); time-slicing-config.yaml (opt-in GPU time-slicing)
 charts/all/ray-serve-llm/      BuildConfig, ImageStream, Deployment, Service, Route (off by default), PVC,
                                ConfigMap, ExternalSecret; compile-cache-pvc.yaml (compileCache node or shared);
-                               scaledobject.yaml, triggerauthentication.yaml, servicemonitor.yaml (keda mode
-                               only); _settings.tpl checks the scale-out settings (settings-check.yaml renders
-                               nothing, it only fails a bad render)
+                               scaledobject.yaml, triggerauthentication.yaml, servicemonitor.yaml,
+                               metrics-token.yaml (keda mode only); _settings.tpl checks the scale-out settings
+                               (settings-check.yaml renders nothing, it only fails a bad render)
 charts/all/keda-config/        KedaController keda (an app only in keda mode)
 charts/all/notebook/           BuildConfig, ImageStream, Deployment (JupyterLab + oauth-proxy), Service, Route,
                                ServiceAccount and RBAC; compare-job.yaml, compare-config.yaml (ConfigMap, PVC)
@@ -220,6 +222,11 @@ Server container environment:
   limited to 108 bytes.
 - `/dev/shm`: an emptyDir with `medium: Memory`, 4Gi.
 - `HF_TOKEN`: from `secretKeyRef` `huggingface-secret` / `hftoken`, `optional: true`.
+- `RAY_AUTH_TOKEN_PATH=/etc/ray-auth/token`, in keda mode only: Ray's cluster token, from Secret
+  `ray-serve-llm-metrics-token` mounted read-only at `/etc/ray-auth` (volume `ray-auth`, not optional), the token the
+  ServiceMonitor scrapes the metrics port with. Ray reads it when it starts. In every other mode the chart leaves the
+  image's own Ray token setup alone. The chart sets neither `RAY_AUTH_TOKEN` (Ray reads it before the path) nor
+  `RAY_AUTH_MODE`.
 
 Notebook environment (set by the chart, read by `rhvp_bench`):
 
@@ -382,22 +389,27 @@ Three parts, each off by default. With every default, the local charts render ex
   replica (`LLMServer.get_deployment_options`). It does not depend on `global.scaleOut.mode`.
 - **Across pods** (`global.scaleOut.mode: keda`): `variants/prod/values-prod.yaml` adds
   `/overrides/values-scaleout-<mode>.yaml` to `sharedValueFiles`; only the keda file exists. It installs Red Hat's
-  Custom Metrics Autoscaler (operator, KedaController through the `keda-config` app), and the server chart renders
-  the ScaledObject, TriggerAuthentication with its ServiceAccount and Roles, the ServiceMonitor and the `metrics`
-  ports (see the names table). The trigger sums `ray_vllm_num_requests_waiting` over the server pods in
-  `vllm-inference`, read from the Thanos Querier on port 9092 (namespace-scoped), and the HPA that KEDA creates
-  divides it by the pod count. Between `minPods` and `maxPods` the HPA reads the metric on its own 15-second sync
-  period: `pollingIntervalSeconds` only sets how often KEDA refreshes the ScaledObject's status. With Ray's metrics
-  export (10 s) and the ServiceMonitor's scrape (15 s) before that read, a pod is asked for from a few seconds up to
-  about 40 seconds after requests start to wait. `cooldownSeconds` is the HPA's scale-down
-  stabilization window. Prerequisites: monitoring for user-defined projects enabled on the cluster, and a second
-  GPU (another GPU node, or `timeSlicing.enabled` in `charts/all/nvidia-gpu-config/values.yaml`, with
-  `gpu_memory_utilization` lowered to leave room for the other pod; nothing checks that). Time-slicing covers every
-  GPU node and namespace, while the comparison's `kube.gpu_free` looks only at `vllm-inference`: a GPU pod from
-  another namespace can then share a timed GPU unseen, so the docs say to turn it off before a comparison. Server
-  pods on more than
-  one node need `modelStorage.accessMode: ReadWriteMany` and `compileCache.mode: shared`; a PVC's access mode
-  cannot change after it is created.
+  Custom Metrics Autoscaler (operator, KedaController through the `keda-config` app), and the server chart renders the
+  ScaledObject, TriggerAuthentication with its ServiceAccount and Roles, the ServiceMonitor and the `metrics` ports
+  (see the names table). The trigger sums `ray_vllm_num_requests_waiting` over the server pods in `vllm-inference`,
+  read from the Thanos Querier on port 9092 (namespace-scoped), and the HPA that KEDA creates divides it by the pod
+  count. Between `minPods` and `maxPods` the HPA reads the metric on its own 15-second sync period:
+  `pollingIntervalSeconds` only sets how often KEDA refreshes the ScaledObject's status. With Ray's metrics export
+  (10 s) and the ServiceMonitor's scrape (15 s) before that read, a pod is asked for from a few seconds up to about 40
+  seconds after requests start to wait. `cooldownSeconds` is the HPA's scale-down stabilization window. The
+  ServiceMonitor scrapes with Ray's cluster token from Secret `ray-serve-llm-metrics-token`, which the server also
+  starts Ray with (`RAY_AUTH_TOKEN_PATH`, "Server container environment"): a Ray build with token authentication on
+  for its metrics endpoint answers 401 to a scrape without it, while Ray 2.60.0 checks no token on that port and takes
+  the file as its cluster token. The chart generates the token with `randAlphaNum 64` on every render; the keda
+  override's ignore rule on `/data/token` keeps the value Argo CD first created, as the notebook app's rule does for
+  `notebook-proxy`. Nothing else in the chart may carry the value or a checksum of it, or the server would roll on
+  every sync (`tests/test_charts.py` checks the render). Prerequisites: monitoring for user-defined projects enabled
+  on the cluster, and a second GPU (another GPU node, or `timeSlicing.enabled` in
+  `charts/all/nvidia-gpu-config/values.yaml`, with `gpu_memory_utilization` lowered to leave room for the other pod;
+  nothing checks that). Time-slicing covers every GPU node and namespace, while the comparison's `kube.gpu_free` looks
+  only at `vllm-inference`: a GPU pod from another namespace can then share a timed GPU unseen, so the docs say to
+  turn it off before a comparison. Server pods on more than one node need `modelStorage.accessMode: ReadWriteMany` and
+  `compileCache.mode: shared`; a PVC's access mode cannot change after it is created.
 - **The comparison's mode `scaleout`** (`global.compare.mode`): docker only for now (`kube.py` refuses it with
   `PLAN_INVALID`). `scaleOut.sharedGpu` only sets the memory default and the 0.475 refusal; the docker backend places
   the replicas from `RHVP_COMPARE_REPLICA_GPUS` (else `RHVP_COMPARE_GPUS`) and refuses, as `PLAN_INVALID` before
@@ -472,8 +484,12 @@ Not checked yet:
 - Nothing of keda mode on OpenShift: the operator install (package and channel are from Red Hat's docs and catalog,
   not from a cluster), the KedaController that the operator and Argo CD both manage, the operator's trust in the
   Thanos Querier's certificate, the ServiceMonitor (kind has no CRD for it), the labels on the real metric, the
-  runner's own Role (the kind check paused as cluster admin), the Argo CD rule that keeps the pause annotation,
-  Red Hat's operator build, and GPU time-slicing.
+  runner's own Role (the kind check paused as cluster admin), the Argo CD rule that keeps the pause annotation, Red
+  Hat's operator build, and GPU time-slicing. Nor the metrics token there: that user-workload monitoring reads Secret
+  `ray-serve-llm-metrics-token` and sends it, that Argo CD keeps its first value, and the order in which the ignore
+  rule (in the clustergroup app) and the Secret (in the ray-serve-llm app) land when keda mode is turned on in a
+  running install. A second sync of the server's app before its rule arrives would replace the token; deleting the
+  server pods then brings both sides back to one token.
 - No server pod has been seen exporting `ray_vllm_num_requests_waiting` under that name; KEDA reads an empty answer
   as 0, so a wrong name means the server never scales, without an error.
 - `compileCache.mode` `node` and `shared`, and `fsGroupChangePolicy: OnRootMismatch`, on OpenShift.
