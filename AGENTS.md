@@ -264,20 +264,25 @@ and uses a serving certificate; the Route uses `reencrypt` termination.
   the same start of the server, so the runner starts nothing again and `start_retries` stays 0. The runner counts
   these from the server's log once it is done with that server (`logs.memory_check_restarts`), in the launch's
   `engine_restarts` and the server record's own: a replica (one `(ServeReplica:<app>:<deployment> pid=N)` prefix)
-  whose lines show `Error in memory profiling`, followed by a line of another replica of the same deployment, counts
-  once, however often Ray relays the error. Not counted: a replica stopped for any other reason, a last replica with
-  none after it (the server exits once Ray Serve gives up, and `start_retries` counts that one; the replicas counted
-  before it carry over to the start again's record), and any `vllm serve` log (no such prefix). A start-up figure
-  includes the engine starts that stopped inside the start it is timed from (the side's last start; each start of the
-  second replica), and `logs.breakdown` adds up every engine start's lines in a log, the stopped ones' included. A
-  GuideLLM time-out runs the launch once more with the same requests (`runner.LOAD_RETRIES`): in mode `levels` from a
-  new start of the side, timed from that start; in mode `scaleout` from a new first replica, after GuideLLM, the
-  router and the replicas that had started are taken down. The launch's `load_timeouts` is counted when the time-out
-  happens and `load_retries` only once the second load begins; the first try's files are kept as `*.try-1.*`, its
-  notes are marked `try 1:`, its server records are marked `discarded`, and its figures are cleared before the
-  teardown. Time-outs count against their side in `analysis.load_timeouts` (totals) and per comparison. When the run
-  ends it scales the server back to `compare.serverReplicas` (1), tries again for about a minute, reads the scale
-  back, and records `run.server_restored`; a server that did not come back is exit 4.
+  whose lines show `Error in memory profiling` counts once, however often Ray relays the error, when a new replica of
+  the same deployment prints its first line after the first of those lines (Ray's late relayed copy of the error
+  often comes after that new first line; the fixtures have both orders). Not counted: a replica stopped for any other
+  reason, a last replica with none after it, and any `vllm serve` log (no such prefix). The server exits once Ray
+  Serve gives up; in its first start, `runner._start_again` then starts it once more whenever
+  `Error in memory profiling` is anywhere in its log, whatever its last replica stopped for (a KV cache too small,
+  say), and `start_retries` and the launch's note count that exit as one at the memory check; the replicas counted
+  before it carry over to the start again's record. A start-up figure includes the engine starts that stopped inside
+  the start it is timed from (the side's last start; each start of the second replica), and `logs.breakdown` adds up
+  every engine start's timed phases in a log, the stopped ones' included, while a moment (`engine_start` and the
+  others in `logs.MOMENTS`) is its first line in the log, the stopped engine's. A GuideLLM time-out runs the launch
+  once more with the same requests (`runner.LOAD_RETRIES`): in mode `levels` from a new start of the side, timed from
+  that start; in mode `scaleout` from a new first replica, after GuideLLM, the router and the replicas that had
+  started are taken down. The launch's `load_timeouts` is counted when the time-out happens and `load_retries` only
+  once the second load begins; the first try's files are kept as `*.try-1.*`, its notes are marked `try 1:`, its
+  server records are marked `discarded`, and its figures are cleared before the teardown. Time-outs count against
+  their side in `analysis.load_timeouts` (totals) and per comparison. When the run ends it scales the server back to
+  `compare.serverReplicas` (1), tries again for about a minute, reads the scale back, and records
+  `run.server_restored`; a server that did not come back is exit 4.
 - The ray-serve-llm app ignores the Deployment's `/spec/replicas` on every install, also with the comparison off: a
   sync never changes the server's replica count, so a server at 0 stays at 0 until someone scales it.
 - SIGTERM (a deleted Job or `activeDeadlineSeconds`) cuts the current launch short and asks the server back at once,
@@ -327,16 +332,20 @@ own: it gave 1 for each of the 7 logs in which one replica stopped at the check 
 them a replica before that one had stopped for another reason, a KV cache too small for the model's length, and was
 not counted), and 0 for the other 59; those runs, from before this count, had `start_retries` 0 in every launch. The
 `ray-serve-start-*.log` fixtures are rebuilt from the line shapes of the 0.33.0 image's logs, with made-up process
-ids, replica ids, times and memory figures and no paths or addresses; none is a copy of one log.
+ids, replica ids, times, durations, memory figures and memory setting, apart from the model's weight size (0.93 GiB,
+the same in every one of those logs), the pattern's default model length (8192) and vLLM's own source line numbers;
+their only path and address are the pattern's ready file (`/tmp/r/rhvp-ready`) and listen address
+(`http://0.0.0.0:8000/`), and no line is a copy of a line of those logs.
 Not checked yet: the twin rule with any real server (it has run against fakes only); the Kubernetes backend with a
 real server; tokens per joule from DCGM (its reader is tested only against hand-written answers, and the DCGM label
 names it matches on have not been checked against a real DCGM exporter), and the 2 s DCGM interval on a cluster; a
-run on OpenShift, with or without a GPU (restricted SCC, internal registry, Argo CD health of the Job); the
-example's own settings; the length of a run (an estimate of about 4 to 6 hours with the defaults); a launch
-whose GuideLLM timed out and ran again, which only the fake backend of the unit tests has gone through; and the
-engine restart count with vLLM 0.29.0, on Kubernetes, inside the second replica of mode `scaleout`, and for a Ray
-Serve LLM server that exits once Ray Serve gives up after replicas stopped at the check (the carry-over into the
-start again), all of which only the fake backend of the unit tests has gone through.
+run on OpenShift, with or without a GPU (restricted SCC, internal registry, Argo CD health of the Job); the example's
+own settings; the length of a run (an estimate of about 4 to 6 hours with the defaults); a launch whose GuideLLM
+timed out and ran again, which only the fake backend of the unit tests has gone through; the engine restart count
+with vLLM 0.29.0 and on Kubernetes, which nothing has gone through yet, unit tests included (their logs have vLLM
+0.33.0's line shapes and their backend is a fake); and the engine restart count inside the second replica of mode
+`scaleout` and for a Ray Serve LLM server that exits once Ray Serve gives up after replicas stopped at the check (the
+carry-over into the start again), which only the fake backend of the unit tests has gone through.
 
 ### How scale out works
 
