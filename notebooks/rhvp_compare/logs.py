@@ -118,10 +118,9 @@ def memory_check_restarts(log: str) -> int:
     A replica is the set of lines that carry its prefix (SERVE_REPLICA). It counts once, however many of its lines
     show the check failing (Ray relays the same failure several times, some copies seconds late, often after the next
     replica's first line), and only when a replica of the same deployment prints its first line after the first of
-    those lines. Not counted: a log without
-    the prefix (a `vllm serve` server, which exits at the check instead), a replica that stopped for any other reason,
-    and a last replica that stopped at the check with none after it (the server then exits, and the runner's own
-    start again, `start_retries`, counts it)."""
+    those lines. Not counted: a log without the prefix (a `vllm serve` server, which exits at the check instead), a
+    replica that stopped for any other reason, and a last replica that stopped at the check with none after it (the
+    server then exits, and the runner's own start again, `start_retries`, counts it)."""
     first_line: dict[tuple[str, str], int] = {}  # replica (deployment, process id) -> number of its first line
     failed_at: dict[tuple[str, str], int] = {}  # replica -> number of its first line that shows the check failing
     for number, (_, text) in enumerate(lines(log)):
