@@ -696,13 +696,15 @@ it. Output tokens per second, over the whole level, is not timed per token.
 - The rule with twins (rounds of A, A~same, B, B~same; the bar from the twins) has run with real servers in three
   comparisons, all with docker on one machine with one GPU whose memory is the machine's own
   (`scripts/compare-local.sh`). Each was planned as 8 rounds with a twin for both sides, after one warm-up launch per
-  side, and in each both sides used the `ray-serve-llm` preset: this pattern's own server. Two finished all 8 rounds
-  (34 launches each). The third was stopped in round 7 by a script around the runner that stops a run when the
-  machine's free memory runs low: the runner recorded the launch it was in as `STOPPED`, saved the run as partial and
-  analysed the 6 rounds it had finished. No other launch failed, and the runner started no server again
-  (`start_retries` 0). GuideLLM timed out in six launches across the three runs; each of them ran again from a new
-  start, as "What a run does" describes, and finished. These runs show that the runner, the load and the rule work end
-  to end with real servers; their figures are not reported here.
+  side, and in each both sides used the `ray-serve-llm` preset: this pattern's own server. Two finished all 8 rounds (34
+  launches each). The third was stopped in round 7 by a script around the runner that stops a run when the machine's
+  free memory runs low: the runner recorded the launch it was in as `STOPPED`, saved the run as partial and analysed the
+  6 rounds it had finished. No other launch failed, and the runner started no server again (`start_retries` 0). In some
+  starts of two of the runs, vLLM's start-up memory check stopped an engine and Ray Serve started a new one inside the
+  same start, as "On one machine" describes; the server logs show it, but these runs came before the engine restart
+  count (`engine_restarts`) and their records do not have it. GuideLLM timed out in six launches across the three runs;
+  each of them ran again from a new start, as "What a run does" describes, and finished. These runs show that the
+  runner, the load and the rule work end to end with real servers; their figures are not reported here.
 - What those three runs leave unchecked. One machine, one GPU, docker only, and one model: the example's, already on the
   model volume, so the warm-up launches downloaded nothing. Not the default settings: one load level (1 stream for 5 s,
   64 prompt and 16 output tokens) instead of three 60-second levels, `gpuMemoryUtilization` 0.12, and

@@ -331,22 +331,23 @@ images with vLLM 0.33 (0.33.0 and a development build of it; not the vLLM 0.29.0
 with Ray Serve LLM and this pattern's server files, each planned as 8 rounds with twins on both sides after one warm-up
 launch per side. Two finished all 8 rounds (34 launches each). A memory guard around the runner stopped the third
 (SIGTERM) in round 7: that launch is `STOPPED`, and the run was saved partial and analysed on its 6 finished rounds. No
-other launch failed, and `start_retries` was 0 in every launch. GuideLLM timed out in six launches across the three;
-each ran again from a new start (`load_retries` 1) and finished. Their settings: the example's model, already on the
-model volume; one load level, 5 s at 1 stream; `gpuMemoryUtilization` 0.12; `startup/first_answer_s` the only primary
-case; energy `none`; no `SERVER_CONTAINER`; cold compile caches. Their code: `notebooks/rhvp_compare` and
-`scripts/compare-local.sh` of commit `7ec0b75` (comments aside), and server files with an earlier, unmerged form of
-`serve_app.engine_flags` (each value read as YAML, nothing checked against `AsyncEngineArgs`); one run's sides started
-through a wrapper `command` that then runs the entrypoint, on the same images plus a test layer. The engine restart
-count (`logs.memory_check_restarts`) was run afterwards over the 66 server logs of two of those comparisons, the stopped
-one and one that finished (`*.try-1.*` logs included): it gave 1 for each of the 7 logs in which one replica stopped at
-the check and a new one followed (in one of them a replica before that one had stopped for another reason, a KV cache
-too small for the model's length, and was not counted), and 0 for the other 59. The `ray-serve-start-*.log` fixtures are
-rebuilt from the line shapes of the 0.33.0 image's logs, with made-up process ids, replica ids, times, durations, memory
-figures and memory setting, apart from the model's weight size (0.93 GiB, the same in every one of those logs), the
-pattern's default model length (8192) and vLLM's own source line numbers; their only path and address are the pattern's
-ready file (`/tmp/r/rhvp-ready`) and listen address (`http://0.0.0.0:8000/`), and no line is a copy of a line of those
-logs.
+other launch failed, and `start_retries` was 0 in every launch (an engine that Ray Serve replaced inside a start does
+not count there; see the restart count below). GuideLLM timed out in six launches across the three; each ran again from
+a new start (`load_retries` 1) and finished. Their settings: the example's model, already on the model volume; one load
+level, 5 s at 1 stream; `gpuMemoryUtilization` 0.12; `startup/first_answer_s` the only primary case; energy `none`; no
+`SERVER_CONTAINER`; cold compile caches. Their code: `notebooks/rhvp_compare` and `scripts/compare-local.sh` of commit
+`7ec0b75` (comments aside), and server files with an earlier, unmerged form of `serve_app.engine_flags` (each value read
+as YAML, nothing checked against `AsyncEngineArgs`); one run's sides started through a wrapper `command` that then runs
+the entrypoint, on the same images plus a test layer. The engine restart count (`logs.memory_check_restarts`) was run
+afterwards over the 66 server logs of two of those comparisons, the stopped one and one that finished (`*.try-1.*` logs
+included): it gave 1 for each of the 7 logs in which one replica stopped at the check and a new one followed (in one of
+them a replica before that one had stopped for another reason, a KV cache too small for the model's length, and was not
+counted), and 0 for the other 59; over the 35 server logs of the other finished comparison it gave 0 for each. The
+`ray-serve-start-*.log` fixtures are rebuilt from the line shapes of the 0.33.0 image's logs, with made-up process ids,
+replica ids, times, durations, memory figures and memory setting, apart from the model's weight size (0.93 GiB, the same
+in every one of those logs), the pattern's default model length (8192) and vLLM's own source line numbers; their only
+path and address are the pattern's ready file (`/tmp/r/rhvp-ready`) and listen address (`http://0.0.0.0:8000/`), and no
+line is a copy of a line of those logs.
 Not checked yet: the twin rule with real servers beyond those three runs: with a `vllm-openai` or `custom` side, on the
 image `inference-server/` builds (vLLM 0.29.0), with the example's settings and default primary cases, with energy, with
 `SERVER_CONTAINER`, with a warm compile cache, with the current `serve_app.engine_flags` and the runner's later changes
