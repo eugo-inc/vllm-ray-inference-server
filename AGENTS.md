@@ -152,10 +152,12 @@ edit them by hand; `patternizer upgrade` rewrites them. You may add targets to `
    given twice, a `--no-` flag with a value and a value with no flag before it. `load_config` then refuses, from
    flags and `llm.yaml` alike, `model` and `served_model_name`, a true `disable_log_stats` and a
    `distributed_executor_backend` other than `ray` (`null` in `llm.yaml` included: Ray Serve LLM refuses the key
-   whenever it is there and not `ray`), which Ray Serve LLM 2.60.0 would refuse only once Ray has started; the
-   backend's message quotes the value given. No flag is dropped. Where vLLM cannot be imported (the unit tests) only
-   the form is checked, with a warning. The rules were run side by side against `vllm serve`'s own parser for vLLM
-   0.33.0; for vLLM 0.29.0, which this image pins, only the fields' declared types at its tag were read.
+   whenever it is there and not `ray`), which Ray Serve LLM 2.60.0 would refuse only once Ray has started. The
+   backend's message quotes the value given, as do `load_config`'s range checks, such as a `max_model_len` or a
+   `tensor_parallel_size` below 1, whichever of flags and `llm.yaml` gave it. No flag is dropped. Where vLLM cannot
+   be imported (the unit tests) only the form is checked, with a warning. The rules were run side by side against
+   `vllm serve`'s own parser for vLLM 0.33.0; for vLLM 0.29.0, which this image pins, only the fields' declared
+   types at its tag were read.
 3. It starts Ray with a 2 GiB object store and its Prometheus metrics on port 8080 (`metrics_port`), checks that
    Ray sees enough GPUs for `max_replicas` replicas (exit 2 when it does not and `max_replicas` is above 1), starts
    Serve on `0.0.0.0:8000`, and runs the Ray Serve LLM app `llm`. `serve.run` returns once the app is RUNNING,
