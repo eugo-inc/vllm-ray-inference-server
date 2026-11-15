@@ -207,8 +207,10 @@ def test_default_render_has_no_scale_out_parts(server):
     assert [p["name"] for p in one(server, "Service", "ray-serve-llm")["spec"]["ports"]] == ["http"]
     env = env_map(c)
     assert "CUDA_CACHE_PATH" not in env and "CUDA_CACHE_MAXSIZE" not in env
+    assert "RAY_AUTH_TOKEN_PATH" not in env  # keda mode only: the build's own Ray token setup is left alone
     vols = {v["name"]: v for v in deploy["spec"]["template"]["spec"]["volumes"]}
     assert vols["cache"] == {"name": "cache", "emptyDir": {"sizeLimit": "20Gi"}}
+    assert "ray-auth" not in vols and "ray-auth" not in [m["name"] for m in c["volumeMounts"]]
     assert not [d for d in server if d["kind"] == "PersistentVolumeClaim" and d["metadata"]["name"] == COMPILE_CACHE_PVC]
     llm = yaml.safe_load(llm_yaml(server))
     assert not {"target_ongoing_requests", "gpu_per_replica", "metrics_port"} & set(llm)
@@ -286,6 +288,24 @@ def test_keda_mode_opens_the_metrics_port(server, render):
     # The server exports on that port in every mode (serve_app.ray_init_kwargs); keda only opens it.
     assert llm_yaml(items) == llm_yaml(server)
     assert serve_app.DEFAULTS["metrics_port"] == 8080
+
+
+def test_keda_mode_adds_only_the_port_and_the_token_to_the_server(server, render):
+    # Besides the metrics port, keda mode gives the server Ray's cluster token (metrics-token.yaml, the one the
+    # ServiceMonitor scrapes with) as a file named by RAY_AUTH_TOKEN_PATH; the rest of the pod is the default one.
+    keda_deploy = one(render_of(render, "keda"), "Deployment", "ray-serve-llm")
+    pod = keda_deploy["spec"]["template"]["spec"]
+    c = container(keda_deploy, "server")
+    assert {"name": "RAY_AUTH_TOKEN_PATH", "value": "/etc/ray-auth/token"} in c["env"]
+    assert {"name": "ray-auth", "mountPath": "/etc/ray-auth/token", "subPath": "token", "readOnly": True} in (
+        c["volumeMounts"])
+    assert {"name": "ray-auth", "secret": {"secretName": "ray-serve-llm-metrics-token",
+                                           "items": [{"key": "token", "path": "token"}]}} in pod["volumes"]
+    c["ports"] = [p for p in c["ports"] if p["name"] != "metrics"]
+    c["env"] = [e for e in c["env"] if e["name"] != "RAY_AUTH_TOKEN_PATH"]
+    c["volumeMounts"] = [m for m in c["volumeMounts"] if m["name"] != "ray-auth"]
+    pod["volumes"] = [v for v in pod["volumes"] if v["name"] != "ray-auth"]
+    assert keda_deploy == one(server, "Deployment", "ray-serve-llm")
 
 
 def test_model_storage_access_mode_is_the_setting(server):

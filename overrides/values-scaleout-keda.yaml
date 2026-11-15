@@ -23,8 +23,8 @@
 #
 # clusterGroup.applications.ray-serve-llm.ignoreDifferences is a list, and a list
 # in a later values file replaces the earlier one. This file therefore restates
-# the app's rules from variants/prod/values-prod.yaml and adds one; keep the two
-# in step (tests/test_charts.py checks it).
+# the app's rules from variants/prod/values-prod.yaml and adds two; keep the two
+# files in step (tests/test_charts.py checks it).
 clusterGroup:
   namespaces:
     # Red Hat installs the operator for all namespaces: an OperatorGroup with no
@@ -70,3 +70,11 @@ clusterGroup:
           name: ray-serve-llm
           jqPathExpressions:
             - '.metadata.annotations["autoscaling.keda.sh/paused-replicas"]'
+        # Ray's cluster token for the metrics scrape (charts/all/ray-serve-llm/
+        # templates/metrics-token.yaml) is generated once, when the Secret is first
+        # created; later renders must not replace it.
+        - kind: Secret
+          name: ray-serve-llm-metrics-token
+          namespace: vllm-inference
+          jsonPointers:
+            - /data/token
