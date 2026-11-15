@@ -6,6 +6,7 @@ results at all; and a run in mode scaleout, in the notebook and in results.md.
 Run with: python -m pytest -q tests/test_compare_notebook.py
 """
 
+import html
 import json
 import re
 import shutil
@@ -165,6 +166,27 @@ def test_a_results_file_from_before_the_server_records_and_the_cache_setting_is_
     jsonschema.validate(data, SCHEMA)
     text = report.markdown(data)
     assert f"- launch {data['launches'][2]['index']} ({data['launches'][2]['side']}): started 2 times in all" in text
+    for call in (show.runs, show.verdicts, show.startup, show.energy, show.provenance):
+        _shown(monkeypatch, data, call)
+
+
+def test_a_results_file_from_before_engine_restarts_were_counted_is_still_read(monkeypatch):
+    # launches[].engine_restarts and servers[].engine_restarts came later in /2 and are not required: a file without
+    # them validates and reads as no engine restarts; one with them is listed in results.md and in the notebook.
+    data = example.synthesize()
+    for launch in data["launches"]:
+        del launch["engine_restarts"]
+        for item in launch["servers"]:
+            del item["engine_restarts"]
+    jsonschema.validate(data, SCHEMA)
+    assert "engine started again" not in report.markdown(data)
+    assert "by itself" not in "".join(show._head(data, [], []))
+    third = data["launches"][2]
+    third["engine_restarts"] = third["servers"][0]["engine_restarts"] = 1
+    jsonschema.validate(data, SCHEMA)
+    assert f"- launch {third['index']} ({third['side']}): engine started again once" in report.markdown(data)
+    restarted = words.RUN_ENGINE_RESTARTED.format(launches=f"{third['index']} ({third['side']}, 1)")
+    assert html.escape(restarted) in "".join(show._head(data, [], []))
     for call in (show.runs, show.verdicts, show.startup, show.energy, show.provenance):
         _shown(monkeypatch, data, call)
 
