@@ -470,6 +470,17 @@ surge, and `runner.joined_during_surge` now marks them as after it. The mock ser
 earlier version, under the earlier rule (rounds of A and B, no twins), on one machine with one GPU: three runs of one
 round each, one complete, two partial because nearly every request missed the goals at the rate they used.
 
+The metrics token was checked on CPU only, without a cluster: one Ray head per container, started as `serve_app.py`
+starts it, with no Serve app, a token file mounted at `/etc/ray-auth/token` and `RAY_AUTH_TOKEN_PATH` set. Ray 2.60.0
+answered 200 on the metrics port with no token, a wrong one and the file's; it ran in token mode with the file's token
+(without `RAY_AUTH_TOKEN_PATH` it also runs in token mode, with a token it writes to `~/.ray/auth_token`); and a
+second process attached with `ray.init(address="auto")`, as `rhvp_status.py` does. A Ray 2.61 development build that
+checks the token on that endpoint answered 401 with no token and 403 with a wrong one in each of four runs (one of
+them with Ray's OpenTelemetry metrics path turned on), loaded the file's token, and answered 200 to 23 of the 24
+scrapes with it; the other, the only such scrape of the first run, answered 500, and that run kept no detail of it.
+With the path set and no file, both builds stopped in `ray.init` (`AuthenticationError`), which is why the chart's
+mount is not optional.
+
 Not checked yet:
 
 - No GPU scale event: no real vLLM replica or server pod has been added by either autoscaler. The GPU check at
@@ -489,7 +500,7 @@ Not checked yet:
   `ray-serve-llm-metrics-token` and sends it, that Argo CD keeps its first value, and the order in which the ignore
   rule (in the clustergroup app) and the Secret (in the ray-serve-llm app) land when keda mode is turned on in a
   running install. A second sync of the server's app before its rule arrives would replace the token; deleting the
-  server pods then brings both sides back to one token.
+  server pods then brings both sides back to one token. Nor a Serve app running on a Ray build that checks the token.
 - No server pod has been seen exporting `ray_vllm_num_requests_waiting` under that name; KEDA reads an empty answer
   as 0, so a wrong name means the server never scales, without an error.
 - `compileCache.mode` `node` and `shared`, and `fsGroupChangePolicy: OnRootMismatch`, on OpenShift.
