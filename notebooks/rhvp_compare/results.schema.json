@@ -1334,7 +1334,7 @@
         },
         "values": {
           "type": "object",
-          "description": "The launch's figure for each case id in plan.cases that it measured. A 0, such as 0 output tokens per second, gives no ratio. On side A or B, in any round, it gives that case NO VERDICT (nonpositive_value, unless a reason the analysis checks first applies). In a round where a side and its twin both have a figure, a 0 on either leaves that side with no noise floor, so every case whose floor uses that comparison gets NO VERDICT as well (analysis.nonpositive_twins); a twin's 0 in a round where its side has no figure is neither graded nor named. The analysis reads only this map.",
+          "description": "The launch's figure for each case id in plan.cases that it measured. A 0, such as 0 output tokens per second, gives no ratio. On side A or B, in any round, it gives that case NO VERDICT (nonpositive_value, unless a reason the analysis checks first applies). In a round where a side and its twin both have a figure, a 0 on either leaves that side with no noise floor, so every case whose floor uses that comparison gets NO VERDICT as well (analysis.nonpositive_twins); a twin's 0 in a round where its side has no figure is neither graded nor named. The analysis reads only this map. Only a launch with status ok is read; a failed launch's figures are kept but not graded.",
           "additionalProperties": {
             "type": "number",
             "minimum": 0
@@ -1797,7 +1797,7 @@
             "A",
             "B"
           ],
-          "description": "Rounds a side lost through its own doing (its launch failed with SIDE_FAILED, SIDE_NEVER_READY or LOAD_FAILED, or requests failed at the case's level) while the other side did not; any makes the case NO VERDICT (side_failed)."
+          "description": "Rounds a side lost through its own doing (its launch failed with SIDE_FAILED, SIDE_NEVER_READY or LOAD_FAILED, or requests failed at the case's level) while the other side did not; any makes the case NO VERDICT (side_failed, unless the launches ran on more than one node, which is checked first: more_than_one_node)."
         },
         "outcome": {
           "enum": [
@@ -1968,25 +1968,25 @@
                 "items": {
                   "type": "integer"
                 },
-                "description": "Rounds in which the side's own figure was 0 or less."
+                "description": "Rounds in which the side's own figure was 0 or less, among the rounds where the side and its twin both have a figure."
               },
               "twin_rounds": {
                 "type": "array",
                 "items": {
                   "type": "integer"
                 },
-                "description": "Rounds in which the twin's figure was 0 or less."
+                "description": "Rounds in which the twin's figure was 0 or less, among the rounds where the side and its twin both have a figure."
               },
               "cases": {
                 "type": "array",
                 "items": {
                   "type": "string"
                 },
-                "description": "The cases whose floor uses this comparison (the case's floor group): each gets NO VERDICT (nonpositive_value)."
+                "description": "The cases whose floor uses this comparison (the case's floor group): each gets NO VERDICT (nonpositive_value, unless a reason the analysis checks first applies)."
               }
             }
           },
-          "description": "Each side and case whose comparison with the twin has a figure of 0 or less in some paired round. That gives no ratio, so the side has no noise floor on the case's floor group, and every case in the group gets NO VERDICT (nonpositive_value); the floor is never taken from the rounds that are left. Also named in analysis.notes."
+          "description": "Each side and case whose comparison with the twin has a figure of 0 or less in some paired round. That gives no ratio, so the side has no noise floor on the case's floor group, and every case in the group gets NO VERDICT (nonpositive_value, unless a reason the analysis checks first applies); the floor is never taken from the rounds that are left. Also named in analysis.notes."
         },
         "refusals": {
           "type": "array",

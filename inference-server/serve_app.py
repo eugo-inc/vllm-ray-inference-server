@@ -306,13 +306,21 @@ def engine_flags(argv: List[str], types: Optional[Mapping[str, Any]] = None) -> 
             value = argv[i]
             i += 1
         key = name.replace("-", "_")
-        if key in ("hf_token", "no_hf_token"):  # before any message that would repeat the token
+        # Before any later message that would repeat the token. The name check above comes first and quotes an
+        # argument up to its first "=": a flag and its token given as one argument, "--hf-token <token>", whole.
+        if key in ("hf_token", "no_hf_token"):
             raise ConfigError("engine flag --hf-token: give a Hugging Face token as the HF_TOKEN variable instead")
-        flag = f"--{name}"  # messages name the flag, not its value
+        # Messages name the flag. Of this function's messages, only these quote what was given: a value of the wrong
+        # kind, and None, '' or null; a value with no flag before it, or a short flag (the whole argument); and a name
+        # the check above refuses (the argument up to its first "=", so "--api-key <key>" given as one argument is
+        # quoted whole). The others never do, nor does a --no- flag with a value: that is checked before the name, so
+        # --no-api-key=<key> would otherwise put a key in the log. Some of load_config's later checks quote the value
+        # too: distributed_executor_backend, a revision that disagrees with model_revision, and the range checks.
+        flag = f"--{name}"
         negated = key.startswith("no_")
         if negated:
             if value is not None:
-                raise ConfigError(f"engine flag {flag!r} takes no value (got {value!r}); {flag} alone sets false")
+                raise ConfigError(f"engine flag {flag!r} takes no value; {flag} alone sets false")
             key = key[3:]
         if key in FORBIDDEN_ENGINE_KWARGS:
             raise ConfigError(
@@ -331,7 +339,14 @@ def engine_flags(argv: List[str], types: Optional[Mapping[str, Any]] = None) -> 
                 for prefix, other in (("disable_", "enable_"), ("enable_", "disable_")):
                     opposite = other + key[len(prefix):]
                     if key.startswith(prefix) and opposite in types:
-                        hint = f"for the opposite of {opposite}, give --no-{opposite.replace('_', '-')}"
+                        # --disable-x is enable_x false (give --no-enable-x); --no-disable-x is enable_x true
+                        # (give --enable-x).
+                        spelled = opposite.replace("_", "-")
+                        hint = (f"for {opposite} true, give --{spelled}" if negated else
+                                f"for {opposite} false, give --no-{spelled}")
+                        if negated and opposite == "disable_log_stats":  # _validate refuses it: no hint to it
+                            hint = ("a true disable_log_stats is not allowed: Ray Serve LLM's engine metrics need "
+                                    "vLLM's stats")
                 raise ConfigError(
                     f"engine flag {flag!r}: {key} is not a vLLM engine argument of the vLLM in this image ({hint})"
                 )
@@ -496,11 +511,11 @@ def _validate(cfg: Dict[str, Any]) -> Dict[str, Any]:
         raise ConfigError(
             "engine_kwargs.disable_log_stats is not allowed: Ray Serve LLM's engine metrics need vLLM's stats"
         )
-    backend = engine_kwargs.get("distributed_executor_backend")
-    if backend is not None and backend != "ray":
+    # Ray Serve LLM 2.60.0 refuses the key whenever it is present and not "ray" (a null too), inside the replica.
+    if "distributed_executor_backend" in engine_kwargs and engine_kwargs["distributed_executor_backend"] != "ray":
         raise ConfigError(
-            f"engine_kwargs.distributed_executor_backend {backend!r} is not allowed: Ray Serve LLM runs the "
-            f"engine's workers with Ray only (\"ray\")"
+            f"engine_kwargs.distributed_executor_backend {engine_kwargs['distributed_executor_backend']!r} is not "
+            f"allowed: Ray Serve LLM runs the engine's workers with Ray only (\"ray\"); leave it out or set \"ray\""
         )
     if "revision" in engine_kwargs:
         kw_revision = engine_kwargs.pop("revision")

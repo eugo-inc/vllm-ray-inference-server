@@ -262,8 +262,9 @@ def levels(report: Mapping) -> list[dict]:
 def flat_values(level_list: list[Mapping]) -> dict[str, float]:
     """The comparison's per-launch figures from the usable levels (case ids as in plan.case_family). A figure of 0
     is kept (a level whose requests finished without one output token has 0 tokens per second): on side A or B the
-    analysis gives that case NO VERDICT (nonpositive_value) instead of leaving the pair out unseen; in a side's
-    comparison with its twin, every case whose floor uses that comparison gets it too, with a note."""
+    analysis gives that case NO VERDICT (nonpositive_value, unless a reason the analysis checks first applies)
+    instead of leaving the pair out unseen; in a side's comparison with its twin, in a round where both have a
+    figure, every case whose floor uses that comparison gets it too, with a note."""
     out: dict[str, float] = {}
     for level in level_list:
         c = level.get("concurrency")
@@ -318,8 +319,9 @@ def surge_values(level: Mapping) -> dict[str, float]:
     - surge/slo_attainment and surge/goodput_rps are kept whenever GuideLLM gives them, failed requests included
       (they count as requests that missed the goals). When no request finished or failed in the whole surge,
       GuideLLM gives no attainment; both are then 0, a figure the analysis does not take as a ratio, so the case
-      gets NO VERDICT (nonpositive_value) instead of losing the round unseen. A goodput GuideLLM leaves out when the
-      attainment is 0 is 0 too.
+      gets NO VERDICT (nonpositive_value, unless a reason the analysis checks first applies) instead of losing the
+      round unseen; a twin's 0 counts only in a round where its side has a figure too. A goodput GuideLLM leaves out
+      when the attainment is 0 is 0 too.
     - surge/ttft_ms_median, surge/itl_ms_median and surge/output_tokens_per_s follow the rule of a load level: only
       when no request failed and at least one finished."""
     requests = level.get("requests") or {}

@@ -325,6 +325,11 @@ def test_one_side_at_a_share_of_1_is_named_with_the_rate_to_raise(monkeypatch, r
     note = words.SCALE_RATE_ONE_SIDE.format(side="B", met=met, surges=16)
     assert note in report.markdown(results)
     assert note in _shown(monkeypatch, results, show.scale_out)
+    # The note names zero_floor, so it is shown only when that is the case's reason: a reason checked first (two
+    # nodes, a side that failed, a 0) leaves it out.
+    for reason in ("more_than_one_node", "side_failed", "nonpositive_value", "one_sided_floor"):
+        row["reason"] = reason
+        assert summary.surge_capped(results) == [] and note not in report.markdown(results)
 
 
 def test_no_side_is_named_when_its_share_was_never_1_or_both_sides_met_every_goal():

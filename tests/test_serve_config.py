@@ -836,8 +836,12 @@ def test_engine_flags_with_vllms_types(argv, expected):
     (["--served-model-name=[\"x\"]"], "engine_kwargs.served_model_name is not allowed"),
     (["--model", "other/model"], "engine_kwargs.model is not allowed"),
     (["--tokens-only"], "tokens_only is not taken here; Ray Serve LLM gives it to vLLM's OpenAI server settings"),
-    (["--disable-prefix-caching"], "give --no-enable-prefix-caching"),
-    (["--enable-log-stats"], "give --no-disable-log-stats"),
+    (["--disable-prefix-caching"], "for enable_prefix_caching false, give --no-enable-prefix-caching"),
+    (["--no-disable-prefix-caching"], "for enable_prefix_caching true, give --enable-prefix-caching)"),
+    (["--enable-log-stats"], "for disable_log_stats false, give --no-disable-log-stats"),
+    # Its opposite, a true disable_log_stats, is refused too (load_config): the hint says so instead of naming it.
+    (["--no-enable-log-stats"], "(a true disable_log_stats is not allowed: Ray Serve LLM's engine metrics need "
+                                "vLLM's stats)"),
     (["--seed", "1.5"], "seed takes a whole number"),
     (["--seed", "NaN"], "seed takes a whole number"),
     (["--seed", "true"], "seed takes a whole number"),
@@ -926,7 +930,7 @@ def test_bad_or_forbidden_engine_flags_exit_2(tmp_path, monkeypatch, capsys, cap
 
 @pytest.mark.parametrize("argv", [
     ["--hf-token=hf_secret"], ["--hf-token", "hf_secret"], ["--no-hf-token=hf_secret"], ["--api-key=secret"],
-    ["--api-key", "secret"], ["--Api-Key=secret"],
+    ["--api-key", "secret"], ["--Api-Key=secret"], ["--no-api-key=secret"], ["--no-enable-prefix-caching=secret"],
 ])
 def test_refusals_do_not_repeat_a_secret_value(argv):
     for types in (None, FAKE_VLLM_TYPES):
@@ -954,6 +958,30 @@ def test_settings_ray_serve_llm_refuses_are_exit_2_before_ray_starts(tmp_path, m
     assert in_yaml != CONTRACT_YAML
     with pytest.raises(serve_app.ConfigError, match="disable_log_stats is not allowed"):
         load_config(write(tmp_path, in_yaml), {})
+
+
+@pytest.mark.parametrize("value", ["null", "mp", "''"])
+def test_a_distributed_executor_backend_in_llm_yaml_other_than_ray_is_exit_2(tmp_path, monkeypatch, capsys, caplog,
+                                                                             value):
+    """Ray Serve LLM 2.60.0 refuses distributed_executor_backend whenever the key is there and is not "ray", a null
+    too (get_initialization_kwargs tests the key, not its value); here that is exit 2 before Ray starts."""
+    in_yaml = CONTRACT_YAML.replace("tensor_parallel_size: 1}",
+                                    f"tensor_parallel_size: 1, distributed_executor_backend: {value}}}")
+    assert in_yaml != CONTRACT_YAML
+    with pytest.raises(serve_app.ConfigError, match="distributed_executor_backend .* is not allowed"):
+        load_config(write(tmp_path, in_yaml), {})
+    monkeypatch.setenv("RAY_TMPDIR", str(tmp_path))
+    for name in serve_app.ENV_OVERRIDES:
+        monkeypatch.delenv(name, raising=False)
+    with caplog.at_level(logging.ERROR, logger="rhvp.serve"):
+        assert serve_app.main(["--config", write(tmp_path, in_yaml), "--print-config"]) == 2
+    assert capsys.readouterr().out == ""
+    assert any("distributed_executor_backend" in record.getMessage() for record in caplog.records), caplog.text
+    # "ray" and no key at all both pass, as before.
+    ray_yaml = CONTRACT_YAML.replace("tensor_parallel_size: 1}",
+                                     "tensor_parallel_size: 1, distributed_executor_backend: ray}")
+    assert load_config(write(tmp_path, ray_yaml), {})["engine_kwargs"]["distributed_executor_backend"] == "ray"
+    assert "distributed_executor_backend" not in load_config(write(tmp_path, CONTRACT_YAML), {})["engine_kwargs"]
 
 
 def test_without_vllm_the_flags_are_checked_by_form_only_and_it_says_so(tmp_path, monkeypatch, capsys, caplog,

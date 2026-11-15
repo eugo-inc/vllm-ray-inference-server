@@ -710,10 +710,12 @@ it. Output tokens per second, over the whole level, is not timed per token.
   flags. Where both took a set, they gave the same setting, apart from the syntax in "Run a comparison",
   `--reasoning-parser none` (which `vllm serve` turns into no parser and the server passes on as the text `none`)
   and `--optimization-level 3` (the number 3 here, the text `3` from `vllm serve`; both are the same level once
-  vLLM reads them). The server took four sets that `vllm serve` refuses, all values it does not check:
-  `--compilation-config 3`, an unknown key in `--quantization-config`, a `--kv-transfer-config` that vLLM finds
-  incomplete, and `--cudagraph-capture-sizes=["a"]`. Building vLLM 0.33.0's engine config on CPU refused the first
-  three and accepted the last; no engine was started. For vLLM 0.29.0, which this pattern's image pins, only the
+  vLLM reads them). The server took five sets that `vllm serve` refuses. One is `--no-disable-log-stats`:
+  `vllm serve` takes that flag only as `--disable-log-stats`, and the server's syntax takes `--no-` for every
+  boolean. The other four are values the server does not check: `--compilation-config 3`, an unknown key in
+  `--quantization-config`, a `--kv-transfer-config` that vLLM finds incomplete, and
+  `--cudagraph-capture-sizes=["a"]`. Building vLLM 0.33.0's engine config on CPU refused the first three of those
+  four and accepted the last; no engine was started. For vLLM 0.29.0, which this pattern's image pins, only the
   engine arguments' declared types at that tag were read; nothing was run with it.
 - The length of a run, and so of the server's outage, is an estimate (about 4 to 6 hours for 34 server starts).
 
@@ -929,10 +931,13 @@ two `MIG-...` UUIDs) are compared instead by the MIG device UUIDs that `nvidia-s
 device written two ways (`0:0` and its own `MIG-...` UUID) is refused too. When `nvidia-smi -L` lists no MIG device
 UUID for one of them, the run goes on, and its notes say that the two could not be checked. A MIG device and a whole
 GPU are compared by the parent GPU's UUID. A side with `compileCache: warm` (docker only, and only with the warm-up
-launch) keeps its compile caches from its warm-up launch in a docker volume, so its scored launches start with them;
-`cold`, the default, starts every replica with empty caches. `results.md` and the notebook show each side's setting,
-and when the two sides differ they say so next to the primary cases: the start-up figures then compare the two cache
-settings together with the two images. The setting works in mode `levels` too.
+launch) keeps its compile caches from its warm-up launch in a docker volume, so its scored launches start with them.
+It also gets `CUDA_CACHE_PATH=/cache/cuda` and `CUDA_CACHE_MAXSIZE=4294967296` (4 GiB), the values the server chart
+sets for `compileCache.mode` `node` and `shared`, so the CUDA driver's own cache of compiled kernels is kept on that
+volume too; a side's own `env` overrides them. `cold`, the default, starts every replica with empty caches.
+`results.md` and the notebook show each side's setting, and when the two sides differ they say so next to the
+primary cases: the start-up figures then compare the two cache settings together with the two images. The setting
+works in mode `levels` too.
 
 #### Picking the surge rate
 

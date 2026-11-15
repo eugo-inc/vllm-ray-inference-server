@@ -11,6 +11,7 @@ Run with: python -m pytest -q tests/test_compare_parsers.py
 import base64
 import json
 import os
+import re
 import signal
 import struct
 import subprocess
@@ -1235,13 +1236,35 @@ def test_docker_replicas_get_their_own_gpu_the_cpu_set_and_the_warm_cache():
     host1, host2 = docker.created[first["name"]]["HostConfig"], docker.created[second["name"]]["HostConfig"]
     assert host1["DeviceRequests"][0]["DeviceIDs"] == ["0"] and host2["DeviceRequests"][0]["DeviceIDs"] == ["1"]
     assert f"{volume}:/cache" in host2["Binds"] and "/cache" not in host2["Tmpfs"] and host2["CpusetCpus"] == "0-3"
+    # The CUDA driver's own kernel cache goes on the warm volume too, as the server chart's node and shared modes do.
+    for started in (first, second):
+        env = docker.created[started["name"]]["Env"]
+        assert "CUDA_CACHE_PATH=/cache/cuda" in env and "CUDA_CACHE_MAXSIZE=4294967296" in env
     cold = backend.start(plan, plan["launches"][4], side_b, plans.side_spec(plan, side_b))  # launch 5, side B
     cold_host = docker.created[cold["name"]]["HostConfig"]
     assert "/cache" in cold_host["Tmpfs"] and not any(b.endswith(":/cache") for b in cold_host["Binds"])
+    assert not any(e.startswith("CUDA_CACHE_") for e in docker.created[cold["name"]]["Env"])
+    # A side's own env wins over the warm defaults.
+    spec = plans.side_spec(plan, side_a)
+    spec["env"]["CUDA_CACHE_MAXSIZE"] = "1073741824"
+    own = backend.start(plan, plan["launches"][6], side_a, spec)
+    assert "CUDA_CACHE_MAXSIZE=1073741824" in docker.created[own["name"]]["Env"]
+    assert "CUDA_CACHE_PATH=/cache/cuda" in docker.created[own["name"]]["Env"]
     with pytest.raises(runner.RoundError, match="replica 3 needs one more"):
         backend.start(plan, launch, side_a, plans.side_spec(plan, side_a), replica=3)
     backend.cleanup()
     assert docker.volumes_removed == [volume, volume]
+
+
+def test_the_warm_cache_env_matches_the_server_charts_kept_cache_env():
+    # dockerapi.WARM_CACHE_ENV and the server chart's compileCache node/shared env stay in step.
+    template = (ROOT / "charts/all/ray-serve-llm/templates/deployment.yaml").read_text()
+    blocks = [part.split("{{- end }}", 1)[0]
+              for part in template.split('{{- if include "ray-serve-llm.compileCacheKept" . }}')[1:]]
+    [kept] = [block for block in blocks if "CUDA_CACHE_" in block]  # the env the kept-cache modes add
+    found = dict(re.findall(r"- name: (CUDA_CACHE_\w+)\s+(?:#[^\n]*\s+)*value: \"?([^\"\s]+)\"?", kept))
+    assert found == dockerapi.WARM_CACHE_ENV
+    assert "CUDA_CACHE_" not in template.replace(kept, "")  # and only those modes
 
 
 def _scale_plan_for(shared: bool) -> dict:

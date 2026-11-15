@@ -214,14 +214,19 @@ def markdown(results: Mapping) -> str:
     if surges:
         lines += ["", "Surges in which requests failed or none finished. Only their latency medians are left out of "
                       "the comparison: a failed request counts as one that missed the goals in the share within the "
-                      "goals and in goodput. A surge in which no request finished counts as 0 for both, and a figure "
-                      "of 0 gives its case NO VERDICT:"]
+                      "goals and in goodput. A surge in which no request finished counts as 0 for both. A 0 gives no "
+                      "ratio: on side A or B it gives its case NO VERDICT, and on a twin, in a round where its side "
+                      "also has a figure, it gives NO VERDICT to every case whose noise floor uses that comparison "
+                      "(in both, unless a reason the analysis checks first applies). A twin's 0 in a round where its "
+                      "side has no figure is not graded, and the analysis does not name it.", "", "The surges:"]
         lines += [f"- launch {u['index']} ({u['side']}): {u['errored']} requests failed, {u['successful']} succeeded"
                   for u in surges]
     lost = [row for row in rows if any((row.get("lost") or {}).values())]
     if lost:
-        lines += ["", "Cases that lost rounds because one side failed on its own account (so NO VERDICT, "
-                  "side_failed):"]
+        # Named when the cases share one reason: more_than_one_node is checked before side_failed.
+        lost_reasons = {row.get("reason") for row in lost}
+        why = f", {lost_reasons.pop()}" if len(lost_reasons) == 1 else ""
+        lines += ["", f"Cases that lost rounds because one side failed on its own account (so NO VERDICT{why}):"]
         lines += [f"- {row['case']}: side A {row['lost']['A']}, side B {row['lost']['B']}" for row in lost]
     if run.get("server_restored") is False:
         lines += ["", "**The live server was not brought back.** " + "; ".join(

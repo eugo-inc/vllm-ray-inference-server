@@ -142,17 +142,24 @@ edit them by hand; `patternizer upgrade` rewrites them. You may add targets to `
    value; a whole number, a number and a list must be one; text stays text. Choices, enums, mappings, config
    objects and the items of a list go to the engine as given; they are not checked here, and vLLM's own config
    checks are expected to refuse most bad ones when the engine starts. Refused, each with exit 2 and a message that
-   names the flag but not its value: a name that is not a field (vLLM's OpenAI server settings included) or not
-   lower-case words, a flag that needs a value and has none, a value of the wrong kind, `None`, an empty value or
-   `null` (all read as no value), a field that takes a boolean or a value, `--hf-token` (the token comes from
-   `HF_TOKEN`), `--tokens-only` (`serve_app.RAY_FRONTEND_ONLY_KWARGS`: Ray Serve LLM gives that field to vLLM's
-   OpenAI server settings only), `--model` and `--served-model-name`, a short flag, a dotted name, a flag given
-   twice, a `--no-` flag with a value and a value with no flag before it. `load_config` then refuses, from flags
-   and `llm.yaml` alike, `model` and `served_model_name`, a true `disable_log_stats` and a
-   `distributed_executor_backend` other than `ray`, which Ray Serve LLM 2.60.0 would refuse only once Ray has
-   started. No flag is dropped. Where vLLM cannot be imported (the unit tests) only the form is checked, with a
-   warning. The rules were run side by side against `vllm serve`'s own parser for vLLM 0.33.0; for vLLM 0.29.0,
-   which this image pins, only the fields' declared types at its tag were read.
+   names the flag: a name that is not a field (vLLM's OpenAI server settings included) or not lower-case words, a
+   flag that needs a value and has none, a value of the wrong kind, `None`, an empty value or `null` (all read as no
+   value), a field that takes a boolean or a value, `--hf-token` (the token comes from `HF_TOKEN`), `--tokens-only`
+   (`serve_app.RAY_FRONTEND_ONLY_KWARGS`: Ray Serve LLM gives that field to vLLM's OpenAI server settings only),
+   `--model` and `--served-model-name`, a short flag, a dotted name, a flag given twice, a `--no-` flag with a value
+   and a value with no flag before it. Of these, a value of the wrong kind and `None`, an empty value or `null` are
+   quoted back; a short flag and a value with no flag before it are quoted whole; and a name that is not lower-case
+   words or is dotted is quoted up to its first `=`, so a flag and its value given as one argument with a space
+   between (`--api-key <key>`, `--hf-token <token>`) are quoted with the value. The other refusals never repeat the
+   value, a `--no-` flag with a value included (so `--no-api-key=<key>` does not reach the log). `load_config` then
+   refuses, from flags and `llm.yaml` alike, `model` and `served_model_name`, a true `disable_log_stats` and a
+   `distributed_executor_backend` other than `ray` (`null` in `llm.yaml` included: Ray Serve LLM refuses the key
+   whenever it is there and not `ray`), which Ray Serve LLM 2.60.0 would refuse only once Ray has started. The
+   backend's message quotes the value given, as do the refusal of a `revision` that disagrees with `model_revision`
+   and `load_config`'s range checks, such as a `max_model_len` or a `tensor_parallel_size` below 1, whichever of
+   flags and `llm.yaml` gave it. No flag is dropped. Where vLLM cannot be imported (the unit tests) only the form is
+   checked, with a warning. The rules were run side by side against `vllm serve`'s own parser for vLLM 0.33.0; for
+   vLLM 0.29.0, which this image pins, only the fields' declared types at its tag were read.
 3. It starts Ray with a 2 GiB object store and its Prometheus metrics on port 8080 (`metrics_port`), checks that
    Ray sees enough GPUs for `max_replicas` replicas (exit 2 when it does not and `max_replicas` is above 1), starts
    Serve on `0.0.0.0:8000`, and runs the Ray Serve LLM app `llm`. `serve.run` returns once the app is RUNNING,
@@ -203,8 +210,10 @@ Server container environment:
   `FLASHINFER_WORKSPACE_BASE=/cache/flashinfer`, `XDG_CACHE_HOME=/cache/xdg`. With `compileCache.mode: none` (the
   default) `/cache` is an emptyDir, emptied on every new pod. With `node` or `shared` it is PVC
   `ray-serve-llm-compile-cache`, kept for later pods; the pod then also gets `CUDA_CACHE_PATH=/cache/cuda`,
-  `CUDA_CACHE_MAXSIZE=4294967296` (4 GiB) and `fsGroupChangePolicy: OnRootMismatch`. There is no hostPath option:
-  the restricted-v2 SCC the server runs under does not allow hostPath volumes.
+  `CUDA_CACHE_MAXSIZE=4294967296` (4 GiB) and `fsGroupChangePolicy: OnRootMismatch`. The comparison's docker backend
+  gives a `compileCache: warm` side the same two CUDA variables (`dockerapi.WARM_CACHE_ENV`; a test keeps them equal
+  to the chart's). There is no hostPath option: the restricted-v2 SCC the server runs under does not allow hostPath
+  volumes.
 - `RAY_TMPDIR=/tmp/r` on its own emptyDir. Keep it short: Ray puts Unix sockets under it, and socket paths are
   limited to 108 bytes.
 - `/dev/shm`: an emptyDir with `medium: Memory`, 4Gi.

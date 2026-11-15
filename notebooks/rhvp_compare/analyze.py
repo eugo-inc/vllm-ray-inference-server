@@ -16,17 +16,20 @@ Two checks this pattern adds to the rule, because a failed launch does not stop 
 
 - a launch of side A or B that failed through its own doing (its launch failed with SIDE_FAILED, SIDE_NEVER_READY
   or LOAD_FAILED, or requests failed at the case's load level or, in mode scaleout, in the surge) leaves the pairs
-  that are left overstating that side, so the case gets NO VERDICT (side_failed), whichever side failed. A launch
-  that failed for another reason (stopped, the GPU not free, the platform) only means one pair fewer;
+  that are left overstating that side, so the case gets NO VERDICT (side_failed, unless the launches ran on more
+  than one node, which is checked first), whichever side failed. A launch that failed for another reason (stopped,
+  the GPU not free, the platform) only means one pair fewer;
 - launches that ran on more than one node compare the nodes as much as the images: every case gets NO VERDICT
   (more_than_one_node).
 
-A figure of 0 or less gives no ratio. On side A or B the case gets NO VERDICT (nonpositive_value), in a pair of B and
-A or not: a round the other side has no figure for is not left out unseen. In a side's comparison with its twin, that
-side has no noise floor on the case, and every case whose floor uses it (the case's floor group) gets NO VERDICT
-(nonpositive_value) too. The floor is never taken from the rounds that are left: which rounds those are would be
-chosen after seeing a figure. `nonpositive_twins` names the side, the rounds and the cases, and a note names them in
-`notes`.
+A figure of 0 or less gives no ratio. On side A or B the case gets NO VERDICT (nonpositive_value, unless a reason the
+analysis checks first applies), in a pair of B and A or not: a round the other side has no figure for is not left out
+unseen. In a side's comparison with its twin (the rounds where both have a figure), that side has no noise floor on
+the case, and every case whose floor uses it (the case's floor group) gets NO VERDICT too (nonpositive_value, unless a
+reason the analysis checks first applies: more_than_one_node and side_failed come before it). The floor is never taken
+from the rounds that are left: which rounds those are would be chosen after seeing a figure. `nonpositive_twins` names
+the side, the rounds and the cases, and a note names them in `notes`, with the reason its cases got when they share
+one.
 
 A launch whose GuideLLM timed out runs again from a new start of the side (runner.LOAD_RETRIES), so it can finish
 with figures like any other. Every time-out still counts against its side: `load_timeouts` per side over the whole
