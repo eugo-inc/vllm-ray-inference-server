@@ -1109,24 +1109,30 @@ and twin and gets NO VERDICT (`zero_floor`): the run checks the harness, not a r
 
 vLLM servers on Eugo's image start sooner, and start first time.
 
-*Eugo's next vLLM image (release pending) against the upstream `vllm/vllm-openai` v0.33.0 image (arm64). Measured by
-Eugo on one NVIDIA DGX Spark shared with other jobs, with plain `vllm serve` containers (not yet through this
-pattern's Ray Serve LLM server), in paired rounds with an exact sign test. Your hardware, model and settings will
-change the numbers.*
+*Eugo's next vLLM test build (release pending) against the upstream `vllm/vllm-openai` v0.33.0 image (arm64).
+Measured by Eugo on one NVIDIA DGX Spark shared with other jobs, with plain `vllm serve` containers (not yet through
+this pattern's Ray Serve LLM server), in paired rounds with an exact sign test. Your hardware, model and settings
+will change the numbers.*
 
 ### Time for a new server to serve
 
 Qwen2.5-0.5B-Instruct, from container start to the first streamed token. Software caches empty
-(`compileCache.mode: none`); model files already in memory and image already on the machine.
+(`compileCache.mode: none`); model files already in memory and image already on the machine. Both sides loaded the
+weights with `--safetensors-load-strategy eager`; the Eugo build chose its attention kernel itself.
 
 | Against upstream vLLM 0.33.0 | Eugo answered first | Eugo sooner by (median) |
 |---|---|---|
-| With `--attention-backend FLASHINFER` | 6 of 6 rounds (p = 0.031) | 20.2 s (22%) |
+| With `--attention-backend FLASHINFER` and `--attention-config '{"use_trtllm_attention": false}'` | 11 of 11 rounds (p = 0.003) | 10.9 s (18%) |
+| With `--attention-backend TRITON_ATTN` | 9 of 9 rounds (p = 0.004) | 12.0 s (20%) |
+| With `--attention-backend FLASHINFER` | 10 of 10 rounds (p = 0.004) | 16.4 s (25%) |
+
+p: exact sign test, Holm-corrected across the three upstream settings. A round in which upstream's start-up memory
+check stopped both of its tries has no pair.
 
 ### Starts that succeed first time
 
-On the same busy machine, vLLM's start-up memory check stopped 4 of 12 upstream starts and 0 of 28 Eugo starts. Eugo's
-vLLM carries a fix that mitigates this.
+On the same busy machine, vLLM's start-up memory check stopped 15 of 45 upstream starts and 0 of 11 Eugo starts.
+Eugo's vLLM carries a fix that mitigates this.
 
 Not yet measured: this pattern's Ray Serve LLM server, a new node, `compileCache.mode: node` or `shared`, larger
 models, other GPUs. Once the image is released, compare mode's start-up case (`startup/first_answer_s`) can rerun these.
