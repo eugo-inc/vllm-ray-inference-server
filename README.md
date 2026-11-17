@@ -628,7 +628,7 @@ Each failed launch carries one of these codes in `launches[].error_code`:
 The run's own `run.error_code` is null when every launch finished, `LAUNCHES_FAILED` when some launches failed,
 `REQUESTS_FAILED` when every launch ran but requests failed at some load level (that level is left out),
 `STOPPED` when the Job was deleted, `RUN_TIMEOUT` when it reached its time limit (48 hours by default), and
-`RUNNER_FAILED` when the run failed outside a launch. A stopped or timed-out run is analysed on the launches it
+`RUNNER_FAILED` when the run failed outside a launch. A stopped or timed-out run is analyzed on the launches it
 finished. A config that cannot be run, or a run that found another one
 going, writes no results file; `PLAN_INVALID` or `RUN_ACTIVE` then appears only in the log and the termination
 message.
@@ -698,7 +698,7 @@ it. Output tokens per second, over the whole level, is not timed per token.
   (`scripts/compare-local.sh`). Each was planned as 8 rounds with a twin for both sides, after one warm-up launch per
   side, and in each both sides used the `ray-serve-llm` preset: this pattern's own server. Two finished all 8 rounds (34
   launches each). The third was stopped in round 7 by a script around the runner that stops a run when the machine's
-  free memory runs low: the runner recorded the launch it was in as `STOPPED`, saved the run as partial and analysed the
+  free memory runs low: the runner recorded the launch it was in as `STOPPED`, saved the run as partial and analyzed the
   6 rounds it had finished. No other launch failed, and the runner never had to start a server again after vLLM's
   start-up memory check (`start_retries` 0). In some starts of two of the runs, vLLM's start-up memory check stopped an
   engine and Ray Serve started a new one inside the same start, as "On one machine" describes; the server logs show it,

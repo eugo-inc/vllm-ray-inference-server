@@ -60,11 +60,11 @@ one, change it everywhere and run the tests.
 | Image comparison permissions | Role and RoleBinding `image-compare-sides` in `vllm-inference` (pods, pods/log, Secret `huggingface-secret`, `deployments/scale` of `ray-serve-llm`); Role and RoleBinding `image-compare-status` in `vllm-notebook` (ConfigMaps; list pods, for one run at a time); ClusterRole and ClusterRoleBinding `vllm-notebook-image-compare` (nodes, clusterversions); ClusterRoleBinding `vllm-notebook-image-compare-monitoring` (`cluster-monitoring-view`, unless energy is `none`); in keda mode also get and patch on ScaledObject `ray-serve-llm` (`scaledobjects.keda.sh`) in `image-compare-sides` |
 | Image comparison results | PVC `image-compare-results` in `vllm-notebook`, mounted at `/results` in the runner and read-only in the notebook (`RHVP_COMPARE_RESULTS`); status ConfigMap `compare-<run id>` (labels `app.kubernetes.io/component=compare-run`, `compare-run-id=<run id>`) |
 | Image comparison sides | Pods `cmp-<last 8 characters of the run id>-<NN, the launch>-<a, a-same, b or b-same>` in `vllm-inference`, labels `app.kubernetes.io/name=image-compare-side`, `rhvp-compare/run=<run id>`, `rhvp-compare/side` (`A`, `A-same`, `B`, `B-same`), `rhvp-compare/launch` and `rhvp-compare/round` (a number, or `warmup`) |
-| DCGM metrics | namespace `nvidia-gpu-operator` labelled `openshift.io/cluster-monitoring: "true"` (`variants/prod/values-prod.yaml`); while `global.compare.enabled` is true and energy is not `none`, the ClusterPolicy sets `DCGM_EXPORTER_INTERVAL` to 2000 ms and the ServiceMonitor interval to `2s` |
+| DCGM metrics | namespace `nvidia-gpu-operator` labeled `openshift.io/cluster-monitoring: "true"` (`variants/prod/values-prod.yaml`); while `global.compare.enabled` is true and energy is not `none`, the ClusterPolicy sets `DCGM_EXPORTER_INTERVAL` to 2000 ms and the ServiceMonitor interval to `2s` |
 | Server metrics | Ray's Prometheus metrics on port `8080` (`server.metricsPort`, `metrics_port` in `llm.yaml`, `ray.init(_metrics_export_port=...)`) in every install; container port and Service port named `metrics` only in keda mode; vLLM's waiting-request gauge is `ray_vllm_num_requests_waiting` |
 | Replica count log line | one JSON line `{"event":"rhvp-scale",...}` per change (`inference-server/rhvp_scale.py` defines it; `notebooks/rhvp_compare/logs.py` keeps its own copy of the names); deployments as Ray Serve LLM names them, `LLMServer:<model id, "/" as "--" and "." as "_">` and `OpenAiIngress` |
 | Compile cache volume | PVC `ray-serve-llm-compile-cache` at `/cache` while `compileCache.mode` is `node` (ReadWriteOnce) or `shared` (ReadWriteMany); `none` keeps the emptyDir |
-| Autoscaler install (keda mode) | namespace `openshift-keda` (OperatorGroup for all namespaces, labelled `openshift.io/cluster-monitoring: "true"`), Subscription key `keda` for package `openshift-custom-metrics-autoscaler-operator` (channel `stable`), app `keda-config` (`charts/all/keda-config`) with KedaController `keda`; all in `overrides/values-scaleout-keda.yaml`, which `sharedValueFiles` includes as `/overrides/values-scaleout-<global.scaleOut.mode>.yaml` |
+| Autoscaler install (keda mode) | namespace `openshift-keda` (OperatorGroup for all namespaces, labeled `openshift.io/cluster-monitoring: "true"`), Subscription key `keda` for package `openshift-custom-metrics-autoscaler-operator` (channel `stable`), app `keda-config` (`charts/all/keda-config`) with KedaController `keda`; all in `overrides/values-scaleout-keda.yaml`, which `sharedValueFiles` includes as `/overrides/values-scaleout-<global.scaleOut.mode>.yaml` |
 | Autoscaler objects (keda mode) | in `vllm-inference`: ScaledObject `ray-serve-llm` (on Deployment `ray-serve-llm`), TriggerAuthentication `keda-trigger-auth-prometheus`, ServiceAccount `thanos`, Roles and RoleBindings `thanos-metrics-reader` and `keda-operator-token-creator` (for ServiceAccount `openshift-keda/keda-operator`), ServiceMonitor `ray-serve-llm` (port `metrics`, bearer token from Secret `ray-serve-llm-metrics-token`, key `token`) |
 | Metrics token (keda mode) | Secret `ray-serve-llm-metrics-token`, key `token` (`templates/metrics-token.yaml`): Ray's cluster token, mounted read-only in the server container at `/etc/ray-auth/token` (volume `ray-auth`, `subPath: token`, named by `RAY_AUTH_TOKEN_PATH`) and sent by ServiceMonitor `ray-serve-llm`; Argo CD ignores its `/data/token` (`overrides/values-scaleout-keda.yaml`) |
 | Autoscaler pause | annotation `autoscaling.keda.sh/paused-replicas: "0"` on ScaledObject `ray-serve-llm`, set by the comparison's runner (env `RHVP_COMPARE_SERVER_SCALED_OBJECT`, from `compare.serverScaledObject` in the notebook chart) and ignored by Argo CD (`overrides/values-scaleout-keda.yaml`) |
@@ -340,7 +340,7 @@ memory is the machine's own: three comparisons whose sides were both `ray-serve-
 images with vLLM 0.33 (0.33.0 and a development build of it; not the vLLM 0.29.0 this image pins) built for the test
 with Ray Serve LLM and this pattern's server files, each planned as 8 rounds with twins on both sides after one warm-up
 launch per side. Two finished all 8 rounds (34 launches each). A memory guard around the runner stopped the third
-(SIGTERM) in round 7: that launch is `STOPPED`, and the run was saved partial and analysed on its 6 finished rounds. No
+(SIGTERM) in round 7: that launch is `STOPPED`, and the run was saved partial and analyzed on its 6 finished rounds. No
 other launch failed, and `start_retries` was 0 in every launch (an engine that Ray Serve replaced inside a start does
 not count there; see the restart count below). GuideLLM timed out in six launches across the three; each ran again from
 a new start (`load_retries` 1) and finished. Their settings: the example's model, already on the model volume; one load
@@ -352,7 +352,7 @@ the entrypoint, on the same images plus a test layer, which on one side also cha
 model's weights (test code in them read every page of the larger weight tensors before vLLM copied them); that run's
 wrapper also recorded the model files' page-cache state before each start, and a process outside the containers mapped
 the model's file and touched its cached pages as each side started. The engine restart count
-(`logs.memory_check_restarts`) was run afterwards over the 66 server logs of two of those comparisons, the stopped one
+(`logs.memory_check_restarts`) was run afterward over the 66 server logs of two of those comparisons, the stopped one
 and one that finished (`*.try-1.*` logs included): it gave 1 for each of the 7 logs in which one replica stopped at the
 check and a new one followed (in one of them a replica before that one had stopped for another reason, a KV cache too
 small for the model's length, and was not counted), and 0 for the other 59; over the 35 server logs of the other
@@ -659,7 +659,7 @@ The template's `hftoken` value must stay a non-empty string (`"none"`). With `nu
    - Git Config → **Target Repo**: your fork's URL
    - Target Revision: your branch
 4. Click **Create**.
-5. Load secrets afterwards. The console path loads none. Do this even for the default, ungated model: until
+5. Load secrets afterward. The console path loads none. Do this even for the default, ungated model: until
    `secret/data/hub/hfmodel` exists, ExternalSecret `huggingface-secret` is not Ready and Argo CD shows the
    `ray-serve-llm` app as Degraded. The server pod still starts, because the token is optional. Two ways:
    - From a clone of your fork, run `./pattern.sh make load-secrets`.
