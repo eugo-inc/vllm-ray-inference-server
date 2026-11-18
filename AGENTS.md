@@ -364,9 +364,10 @@ durations, memory figures and memory setting, apart from the model's weight size
 those logs), the pattern's default model length (8192) and vLLM's own source line numbers; their only path and address
 are the pattern's ready file (`/tmp/r/rhvp-ready`) and listen address (`http://0.0.0.0:8000/`), and no line is a copy of
 a line of those logs.
+Later runs with real servers under the twin rule, one of them with a warm compile cache, are not among the three.
 Not checked yet: the twin rule with real servers beyond those three runs: with a `vllm-openai` or `custom` side, on the
 image `inference-server/` builds (vLLM 0.29.0), with the example's settings and default primary cases, with energy, with
-`SERVER_CONTAINER`, with a warm compile cache, with the current `serve_app.engine_flags` and the runner's later changes
+`SERVER_CONTAINER`, with the current `serve_app.engine_flags` and the runner's later changes
 (`engine_restarts` among them), and on more than one machine, GPU or model; the Kubernetes backend with a real server;
 tokens per joule from DCGM (its reader is tested only against hand-written answers, and the DCGM label names it matches
 on have not been checked against a real DCGM exporter), and the 2 s DCGM interval on a cluster; a run on OpenShift, with
