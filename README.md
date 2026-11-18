@@ -628,7 +628,7 @@ Each failed launch carries one of these codes in `launches[].error_code`:
 The run's own `run.error_code` is null when every launch finished, `LAUNCHES_FAILED` when some launches failed,
 `REQUESTS_FAILED` when every launch ran but requests failed at some load level (that level is left out),
 `STOPPED` when the Job was deleted, `RUN_TIMEOUT` when it reached its time limit (48 hours by default), and
-`RUNNER_FAILED` when the run failed outside a launch. A stopped or timed-out run is analysed on the launches it
+`RUNNER_FAILED` when the run failed outside a launch. A stopped or timed-out run is analyzed on the launches it
 finished. A config that cannot be run, or a run that found another one
 going, writes no results file; `PLAN_INVALID` or `RUN_ACTIVE` then appears only in the log and the termination
 message.
@@ -695,20 +695,22 @@ it. Output tokens per second, over the whole level, is not timed per token.
 
 - The rule with twins (rounds of A, A~same, B, B~same; the bar from the twins) has run with real servers in three
   comparisons described here, all with docker on one machine with one GPU whose memory is the machine's own
-  (`scripts/compare-local.sh`). Each was planned as 8 rounds with a twin for both sides, after one warm-up launch per
+  (`scripts/compare-local.sh`). Later runs with real servers under the same rule, one of them with compile caches
+  kept between starts, are not among the three. Each of the three was planned as 8 rounds with a twin for both
+  sides, after one warm-up launch per
   side, and in each both sides used the `ray-serve-llm` preset: this pattern's own server. Two finished all 8 rounds (34
   launches each). The third was stopped in round 7 by a script around the runner that stops a run when the machine's
-  free memory runs low: the runner recorded the launch it was in as `STOPPED`, saved the run as partial and analysed the
+  free memory runs low: the runner recorded the launch it was in as `STOPPED`, saved the run as partial and analyzed the
   6 rounds it had finished. No other launch failed, and the runner never had to start a server again after vLLM's
   start-up memory check (`start_retries` 0). In some starts of two of the runs, vLLM's start-up memory check stopped an
   engine and Ray Serve started a new one inside the same start, as "On one machine" describes; the server logs show it,
   but these runs came before the engine restart count (`engine_restarts`) and their records do not have it. GuideLLM
   timed out in six launches across the three runs; each of them ran again from a new start, as "What a run does"
   describes, and finished. These runs show that the runner, the load and the rule work end to end with real servers;
-  their figures are not reported here. Not among the three: an earlier try of one of the two that finished, with the
-  same settings and comparison code, which finished its 2 warm-up and 15 scored launches before it was stopped the same
-  way in round 4 and was saved as partial, and other tries that were stopped in their first warm-up launch, before any
-  scored launch.
+  apart from the results that "Partner results: Eugo" gives, their figures are not reported here. Not among
+  the three: an earlier try of one of the two that finished, with the same settings and comparison code, which finished
+  its 2 warm-up and 15 scored launches before it was stopped the same way in round 4 and was saved as partial, and other
+  tries that were stopped in their first warm-up launch, before any scored launch.
 - What those three runs leave unchecked. One machine, one GPU, docker only, and one model: the example's, already on the
   model volume, so the warm-up launches downloaded nothing. Not the default settings: one load level (1 stream for 5 s,
   64 prompt and 16 output tokens) instead of three 60-second levels, `gpuMemoryUtilization` 0.12, and
@@ -1107,18 +1109,60 @@ and twin and gets NO VERDICT (`zero_floor`): the run checks the harness, not a r
 
 ## Partner results: Eugo
 
-vLLM servers on Eugo's image start sooner, and start first time.
+With empty compile caches, vLLM servers on Eugo's image start sooner than upstream vLLM as shipped, are still sooner
+with plain `vllm serve` when upstream is tuned with an attention setting (both sides loading the weights with
+`--safetensors-load-strategy eager`), and start first time.
 
-*Eugo's next vLLM test build (release pending) against the upstream `vllm/vllm-openai` v0.33.0 image (arm64).
-Measured by Eugo on one NVIDIA DGX Spark shared with other jobs, with plain `vllm serve` containers (not yet through
-this pattern's Ray Serve LLM server), in paired rounds with an exact sign test. Your hardware, model and settings
-will change the numbers.*
+*Eugo's next release build against the upstream `vllm/vllm-openai` v0.33.0 image (arm64). The Eugo build runs a vLLM
+development snapshot from upstream's main branch, taken after 0.33.0 branched off (it reports version
+0.33.0rc1.dev391), plus Eugo's fixes. Where a result says so, Eugo's side used a stand-in for part of that build.
+Measured by Eugo on one NVIDIA DGX Spark shared with other jobs, with docker containers (not OpenShift) and
+Qwen2.5-0.5B-Instruct, in paired rounds with an exact sign test under a pass rule set before each run. Every start
+behind these results was a new container whose compile caches started empty, with the model files already in memory
+and the image already on the machine. Each lead is the median of the per-round differences, so it is not the gap
+between the two medians. Your hardware, model and settings will change the numbers.*
 
-### Time for a new server to serve
+### Against upstream as shipped
 
-Qwen2.5-0.5B-Instruct, from container start to the first streamed token. Software caches empty
-(`compileCache.mode: none`); model files already in memory and image already on the machine. Both sides loaded the
-weights with `--safetensors-load-strategy eager`; the Eugo build chose its attention kernel itself.
+Neither side was given an attention setting: each side chose its attention kernel itself, and in all three rows both
+chose FlashAttention-2. Both sides got the same other settings, listed in the second column, so no row is a start with
+no flags at all. In the first plain `vllm serve` row these include `--safetensors-load-strategy eager`, which is not
+vLLM's default weight loading. In the second, the only engine setting is `--gpu-memory-utilization 0.12` (12% of GPU
+memory; vLLM's default is 0.92, or 92%), so both sides used vLLM's default weight loading and context length. Through
+this pattern's server, both sides used vLLM's default weight loading.
+
+| How the servers ran | Set the same on both sides | Upstream median | Eugo median | Eugo answered first | Eugo sooner by (median) |
+|---|---|---|---|---|---|
+| Plain `vllm serve`, container start to the first streamed token | `--safetensors-load-strategy eager`, `--gpu-memory-utilization 0.12`, `--max-model-len 8192`, `--seed 0` | 140.2 s | 48.8 s | 10 of 10 rounds (p = 0.002) | 90.9 s (65%); upstream took 2.9 times as long |
+| Plain `vllm serve`, container start to the first streamed token | `--gpu-memory-utilization 0.12` only (vLLM's default weight loading) | 219.4 s | 48.4 s | 12 of 12 rounds (p = 0.001) | 169.5 s (77%); upstream took 4.5 times as long |
+| This pattern's Ray Serve LLM server, container start to the first answer | `gpuMemoryUtilization` 0.12 (12% of GPU memory; the pattern's default is 0.85, or 85%) and an 8,192-token context; vLLM's default weight loading; one 5-second load level at one stream | 242.8 s | 227.5 s | 8 of 8 rounds (p = 0.008) | 19.7 s (8%) |
+
+p: each run's own exact sign test. The run with only the 12% GPU memory setting reports its p Holm-corrected, as the
+rule set before that run required. In the eager plain `vllm serve` run, 2 more rounds have no pair: both of upstream's
+tries stopped with out-of-memory errors on the shared machine. Through this pattern's server, the upstream side was
+the v0.33.0 image with Ray 2.60.0 and this pattern's server files added, and one import line in Ray changed for
+vLLM 0.33.
+
+Speed once serving, through this pattern's server against upstream as shipped (one stream):
+
+| Measure | Upstream | Eugo | What it shows |
+|---|---|---|---|
+| Time to first token on short prompts, in the 8 start-up rounds above (with the server's default 50 ms bursts, so most of each figure is the wait for the first burst) | 60.5 ms | 57.7 ms | Eugo lower in 8 of 8 rounds, by 2.8 ms (5%). A secondary measure under the rule: it describes the run and is not a finding. |
+| Time between tokens, in the same rounds (with the same 50 ms bursts) | 3.10 ms | 3.14 ms | A tie. A secondary measure under the rule: it describes the run and is not a finding. The bursts make this figure lower than the real time per token, which the next row measures. |
+| Time per output token with the server sending each token as it is generated (its 50 ms bursts turned off), in a separate short check (2 starts per side, in both orders) | 5.793 ms | 5.797 ms | A tie: 0.004 ms (0.1%) apart, inside the check's 0.040 ms noise bar (the largest gap between the two starts of any one server setup in the check, under a rule set before it ran). |
+
+The time per output token is a tie, and most of it is set by the hardware here. At one stream, each output token
+needs all of the model's weights read from memory once: about 0.99 GB for Qwen2.5-0.5B-Instruct.
+At the NVIDIA DGX Spark's published memory bandwidth of 273 GB/s, that alone takes at least 3.6 ms of the 5.8 ms
+per token, the same for both servers. The rest depends on the software and on how much of that bandwidth the GPU
+reaches; in this check both servers used FlashAttention-2 for attention. The 3.6 ms is a calculation from published
+figures, not a measurement.
+
+### Against upstream tuned with an attention setting: still sooner
+
+Upstream was given one of three attention settings; the Eugo build still chose its attention kernel itself. Plain
+`vllm serve`, container start to the first streamed token; both sides loaded the weights with
+`--safetensors-load-strategy eager`.
 
 | Against upstream vLLM 0.33.0 | Eugo answered first | Eugo sooner by (median) |
 |---|---|---|
@@ -1129,13 +1173,22 @@ weights with `--safetensors-load-strategy eager`; the Eugo build chose its atten
 p: exact sign test, Holm-corrected across the three upstream settings. A round in which upstream's start-up memory
 check stopped both of its tries has no pair.
 
+Through this pattern's Ray Serve LLM server, with the same 12% GPU memory setting, context length and load as the
+server row of the first table, Eugo gave its first answer sooner than upstream with `--attention-backend FLASHINFER`
+and `--safetensors-load-strategy eager`. It was sooner in 8 of 8 paired rounds (p = 0.008, that run's own exact sign
+test), by a median of 15.4 s (17%); the medians were 90.0 s for upstream and 73.8 s for Eugo. In that run, Eugo's side
+used vLLM's default weight loading and a stand-in for part of Eugo's next release build.
+
 ### Starts that succeed first time
 
-On the same busy machine, vLLM's start-up memory check stopped 15 of 45 upstream starts and 0 of 11 Eugo starts.
-Eugo's vLLM carries a fix that mitigates this.
+In the tuned plain `vllm serve` runs, on the same busy machine, vLLM's start-up memory check stopped 12 of 33 upstream
+first tries (15 of 45 starts counting retries) and 0 of 11 Eugo first tries. Through this pattern's server, in the run
+behind the first table's server row, the same check restarted upstream's engine in 2 of 17 launches and Eugo's in
+none; those restarts count in that run's start-up times. In the first table's run with only the 12% GPU memory
+setting, every upstream and Eugo start succeeded on its first try (12 of 12 starts each).
 
-Not yet measured: this pattern's Ray Serve LLM server, a new node, `compileCache.mode: node` or `shared`, larger
-models, other GPUs. Once the image is released, compare mode's start-up case (`startup/first_answer_s`) can rerun these.
+Not yet measured: OpenShift, a new node, `compileCache.mode: node` or `shared` on a cluster, larger models, other
+GPUs. Once Eugo's next release build is out, compare mode's start-up case (`startup/first_answer_s`) can rerun these.
 
 ## Changing the model
 
