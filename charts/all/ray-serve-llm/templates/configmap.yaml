@@ -33,3 +33,8 @@ data:
     {{- if and (include "ray-serve-llm.isNumber" $metrics) (ne (float64 $metrics) 8080.0) }}
     metrics_port: {{ $metrics | int }}
     {{- end }}
+    {{- /* null (or no key) leaves the interval to Ray Serve LLM's own setting: written as null. */}}
+    {{- $interval := .Values.server.streamBatchingIntervalMs }}
+    {{- if not (and (include "ray-serve-llm.isNumber" $interval) (eq (float64 $interval) 0.0)) }}
+    stream_batching_interval_ms: {{ $interval | toJson }}
+    {{- end }}

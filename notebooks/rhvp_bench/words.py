@@ -15,7 +15,9 @@ IN_THIS_RUN = "In this run"
 IN_THIS_REPLAY = "In this replay"
 DRAW_MOVES = "These figures move from run to run."
 ONE_MEASUREMENT = "One measurement."
-STREAM_GROUPS_NOTE = "Ray Serve LLM sends streamed tokens in groups, every 50 ms by default."
+STREAM_INTERVAL_NOTE = ("How often Ray Serve LLM sends streamed tokens follows the server's "
+                        "streamBatchingIntervalMs setting; by default it sends each token as soon as it is "
+                        "generated.")
 
 #: The amber strips above a result.
 INTERNAL_STRIP = ("INTERNAL: run on a shared machine, for checking only. Not a result to publish.")

@@ -810,6 +810,38 @@ def test_a_side_without_a_gpu_and_the_ray_preset():
     assert plan["energy"]["source"] == "none"
 
 
+STREAM_VAR = "RAYLLM_MODEL_RESPONSE_BATCH_TIMEOUT_MS"
+
+
+def test_the_ray_preset_sends_each_streamed_token_at_once_unless_a_side_says_otherwise(tmp_path):
+    config = _plan_config()
+    config["sides"] = [{"name": "a", "image": "x/a:1", "preset": "ray-serve-llm"},
+                       {"name": "b", "image": "x/b:1", "preset": "ray-serve-llm", "env": {STREAM_VAR: "50"}}]
+    plan = plans.build(config, "docker")
+    a, b = (plans.side_spec(plan, side) for side in plan["sides"])
+    assert (a["env"][STREAM_VAR], b["env"][STREAM_VAR]) == ("0", "50")
+    for preset in ("vllm-openai", "guidellm-mock"):
+        other = plans.build({**_plan_config(), "sides": [{"name": "a", "image": "x/a:1", "preset": preset},
+                                                         {"name": "b", "image": "x/b:1", "preset": preset}]},
+                            "docker")
+        assert STREAM_VAR not in plans.side_spec(other, other["sides"][0])["env"], preset
+    # llm.yaml leaves the key null, so the side's variable sets the interval on every image of the server,
+    # including images built before the key existed.
+    llm = json.loads(plans.llm_yaml(plan))
+    assert "stream_batching_interval_ms" in llm and llm["stream_batching_interval_ms"] is None
+    sys.path.insert(0, str(ROOT / "inference-server"))
+    import serve_app
+
+    path = tmp_path / "llm.yaml"
+    path.write_text(plans.llm_yaml(plan))
+    cfg = serve_app.load_config(str(path), a["env"])
+    assert cfg["stream_batching_interval_ms"] is None
+    assert "experimental_configs" not in serve_app.build_llm_config_kwargs(cfg)
+    assert serve_app.stream_interval_text(cfg, a["env"]) == (
+        f"stream_batching_interval_ms=null: Ray Serve LLM's own setting ({STREAM_VAR}=0)")
+    assert serve_app.stream_interval_note(cfg, a["env"]) is None
+
+
 def _pod(phase="Pending", waiting=None, terminated=None, scheduled=None, ip=None) -> dict:
     state = {}
     if waiting:

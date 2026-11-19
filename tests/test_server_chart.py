@@ -250,6 +250,40 @@ def test_rendered_llm_yaml_loads_in_the_server(server, server_variant, render, t
     assert serve_app.poll_interval_s(cfg) == serve_app.SCALE_POLL_INTERVAL_S
 
 
+# ---- the streamed-token interval: written to llm.yaml only away from the server's own default of 0 ----------
+
+
+def test_default_render_leaves_the_stream_interval_to_the_server(server, tmp_path):
+    assert "stream_batching_interval_ms" not in yaml.safe_load(llm_yaml(server))
+    path = tmp_path / "default.yaml"
+    path.write_text(llm_yaml(server))
+    cfg = serve_app.load_config(str(path), {})
+    assert cfg["stream_batching_interval_ms"] == 0
+    assert serve_app.build_llm_config_kwargs(cfg)["experimental_configs"] == {"stream_batching_interval_ms": 0}
+
+
+@pytest.mark.parametrize("name, written, kwargs", [
+    ("interval", 12.5, {"stream_batching_interval_ms": 12.5}),
+    ("interval-null", None, None),
+])
+def test_stream_interval_render_reaches_ray_serve_llm(server, render, tmp_path, name, written, kwargs):
+    items = render_of(render, name)
+    llm = yaml.safe_load(llm_yaml(items))
+    assert "stream_batching_interval_ms" in llm and llm["stream_batching_interval_ms"] == written
+    path = tmp_path / f"{name}.yaml"
+    path.write_text(llm_yaml(items))
+    cfg = serve_app.load_config(str(path), {})
+    assert cfg["stream_batching_interval_ms"] == written
+    assert serve_app.build_llm_config_kwargs(cfg).get("experimental_configs") == kwargs
+    # Only llm.yaml changes, and the pod restarts on it through the config checksum.
+    checksum = "checksum/config"
+    pod = one(items, "Deployment", "ray-serve-llm")["spec"]["template"]
+    default_pod = one(server, "Deployment", "ray-serve-llm")["spec"]["template"]
+    assert pod["metadata"]["annotations"][checksum] != default_pod["metadata"]["annotations"][checksum]
+    assert env_map(container({"spec": {"template": pod}}, "server")) == env_map(
+        container({"spec": {"template": default_pod}}, "server"))
+
+
 @pytest.mark.parametrize("mode, access", [("node", "ReadWriteOnce"), ("shared", "ReadWriteMany")])
 def test_compile_cache_modes_keep_the_caches(server, render, mode, access):
     items = render_of(render, f"cache-{mode}")

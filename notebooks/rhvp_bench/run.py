@@ -221,7 +221,7 @@ def first_token(requests: int = 16, warmup: int = 4) -> None:
         return
     notes = [words.TTFT_SPREAD.format(p90=measure.p90(ttfts), kept=len(t.counted), sent=t.sent),
              *_not_counted(t, s.max_tokens), words.TTFT_TIMED, _shape(result.prompt_tokens(), s.max_tokens),
-             words.ONE_AT_A_TIME, words.WARMUP.format(warmup=result.warmup), words.STREAM_GROUPS_NOTE,
+             words.ONE_AT_A_TIME, words.WARMUP.format(warmup=result.warmup), words.STREAM_INTERVAL_NOTE,
              words.DRAW_MOVES]
     draw.update(handle, *s.strips(), draw.result_card(s.label(words.TTFT_LABEL), f"{measure.median(ttfts):.3f}",
                                                       words.SECONDS, notes))
@@ -247,7 +247,7 @@ def decode(streams: int = 4, warmup: int = 2) -> None:
         return
     notes = [words.DECODE_SPREAD.format(low=min(rates), high=max(rates), kept=len(t.counted), sent=t.sent),
              *_not_counted(t, s.max_tokens), words.DECODE_TIMED, _shape(result.prompt_tokens(), s.max_tokens),
-             words.ONE_AT_A_TIME, words.WARMUP.format(warmup=result.warmup), words.STREAM_GROUPS_NOTE,
+             words.ONE_AT_A_TIME, words.WARMUP.format(warmup=result.warmup), words.STREAM_INTERVAL_NOTE,
              words.DRAW_MOVES]
     draw.update(handle, *s.strips(), draw.result_card(s.label(words.DECODE_LABEL), f"{measure.median(rates):.1f}",
                                                       words.TOKENS_PER_S, notes))
@@ -281,5 +281,5 @@ def throughput(levels: tuple[int, ...] = (1, 8, 32), warmup: int = 2) -> None:
         cards.append(draw.result_card(s.label(label), f"{rate:.0f}" if rate is not None else words.NO_FIGURE,
                                       words.TOKENS_PER_S, notes))
     shared = [words.THROUGHPUT_TIMED, _shape(prompt_tokens, s.max_tokens), words.WARMUP.format(warmup=len(warm)),
-              words.STREAM_GROUPS_NOTE, words.DRAW_MOVES]
+              words.STREAM_INTERVAL_NOTE, words.DRAW_MOVES]
     draw.update(handle, *s.strips(), draw.card_row(cards, shared))

@@ -198,7 +198,9 @@ def test_the_required_sentences():
     # The hedges of the removed two-sided comparison stay gone: one server is measured, nothing is compared.
     assert not hasattr(words, "SINGLE_RUN")
     assert not any(term in text for text in word_strings() for term in ("either way", "p-value", "percent"))
-    assert words.STREAM_GROUPS_NOTE == "Ray Serve LLM sends streamed tokens in groups, every 50 ms by default."
+    assert words.STREAM_INTERVAL_NOTE == (
+        "How often Ray Serve LLM sends streamed tokens follows the server's streamBatchingIntervalMs setting; by "
+        "default it sends each token as soon as it is generated.")
     assert words.BASELINE == ("Stock vLLM 0.29.0 · Ray 2.60.0 · PyTorch 2.13.0 from PyPI · Python 3.12 · NVIDIA CUDA "
                               "13.0.3 UBI 9 image")
     assert words.IN_THIS_RUN == "In this run"
@@ -398,7 +400,7 @@ def test_replay_run_results_carry_the_required_lines(replayed):
         if number == 1:
             assert words.ONE_MEASUREMENT in shown and "Empty when the pod started:" in shown
         else:
-            assert words.STREAM_GROUPS_NOTE in shown, cell.id
+            assert words.STREAM_INTERVAL_NOTE in shown, cell.id
     ready = _visible(_cell_outputs(nb.cells[1]))
     assert words.BASELINE in ready and "Model: qwen2.5-0.5b-instruct" in ready
 
@@ -459,6 +461,6 @@ def test_live_mode_labels_results_in_this_run_and_never_shows_the_endpoint(monke
     assert words.REPLAY_STRIP not in everything and words.INTERNAL_STRIP not in everything
     results = [text for text in shown if f"{words.IN_THIS_RUN} · " in text]
     assert len(results) == 3
-    assert all(words.DRAW_MOVES in text and words.STREAM_GROUPS_NOTE in text for text in results)
+    assert all(words.DRAW_MOVES in text and words.STREAM_INTERVAL_NOTE in text for text in results)
     assert not VENDOR.search(everything)
     assert not ADDRESS.search(everything)

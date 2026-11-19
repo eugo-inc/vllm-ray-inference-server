@@ -21,6 +21,8 @@
 #   charts/nvidia-gpu-config-timeslicing.yaml  with the opt-in GPU time-slicing on
 #   charts/ray-serve-llm-scaling.yaml  in-pod autoscaling from 1 to 2 replicas sharing the GPU
 #   charts/ray-serve-llm-cache-<mode>.yaml  compileCache.mode node and shared
+#   charts/ray-serve-llm-interval*.yaml  server.streamBatchingIntervalMs 12.5 and null (Ray Serve
+#                                LLM's own setting), away from its default 0
 #   charts/<chart>-keda.yaml     every chart with global.scaleOut.mode=keda and that case's
 #                                values files, and notebook-compare-keda.yaml with the
 #                                comparison on too
@@ -211,6 +213,12 @@ for cache in node shared; do
   helm template ray-serve-llm charts/all/ray-serve-llm --namespace vllm-inference "${FARGS[@]}" "${SETS[@]}" \
     --set compileCache.mode="${cache}" > "${RENDER_DIR}/charts/ray-serve-llm-cache-${cache}.yaml"
 done
+# The streamed-token write interval away from its default 0 (charts/all/ray-serve-llm/templates/configmap.yaml):
+# a number (--set reads 12.5 as a string, so it goes in as JSON), and null, which Helm treats as no value.
+helm template ray-serve-llm charts/all/ray-serve-llm --namespace vllm-inference "${FARGS[@]}" "${SETS[@]}" \
+  --set-json server.streamBatchingIntervalMs=12.5 > "${RENDER_DIR}/charts/ray-serve-llm-interval.yaml"
+helm template ray-serve-llm charts/all/ray-serve-llm --namespace vllm-inference "${FARGS[@]}" "${SETS[@]}" \
+  --set server.streamBatchingIntervalMs=null > "${RENDER_DIR}/charts/ray-serve-llm-interval-null.yaml"
 
 # Settings the charts must refuse: the render must fail, and say why.
 refuse() {
@@ -252,6 +260,12 @@ refuse gpu-per-replica-workers ray-serve-llm vllm-inference \
   "server.gpuPerReplica (0.5) must be 1 or equal engineKwargs.tensor_parallel_size times pipeline_parallel_size (2)" \
   --set-json server.gpuPerReplica=0.5 --set server.engineKwargs.tensor_parallel_size=2 --set server.gpuCount=2
 refuse replicas-moved ray-serve-llm vllm-inference "moved to server.autoscaling" --set server.maxReplicas=2
+refuse stream-interval-string ray-serve-llm vllm-inference \
+  "server.streamBatchingIntervalMs must be null or a number of milliseconds of at least 0; got 50 (string)" \
+  --set-string server.streamBatchingIntervalMs=50
+refuse stream-interval-negative ray-serve-llm vllm-inference \
+  "server.streamBatchingIntervalMs must be null or a number of milliseconds of at least 0; got -5 (float64)" \
+  --set-json server.streamBatchingIntervalMs=-5
 refuse compare-mode-unknown notebook vllm-notebook "global.compare.mode must be levels or scaleout" \
   --set global.compare.enabled=true --set global.compare.mode=surge
 refuse keda-threshold ray-serve-llm vllm-inference "scaleOut.waitingRequestsPerPod must be a number above 0" \
@@ -262,7 +276,8 @@ refuse keda-cooldown ray-serve-llm vllm-inference "scaleOut.cooldownSeconds must
   --set global.scaleOut.mode=keda --set scaleOut.cooldownSeconds=7200
 refuse timeslicing-replicas nvidia-gpu-config nvidia-gpu-operator "timeSlicing.replicas must be a whole number of at least 2" \
   --set timeSlicing.enabled=true --set timeSlicing.replicas=1
-echo "rendered charts/ray-serve-llm-scaling.yaml, charts/ray-serve-llm-cache-*.yaml; refused/*.txt as expected"
+echo "rendered charts/ray-serve-llm-scaling.yaml, charts/ray-serve-llm-cache-*.yaml,"
+echo "  charts/ray-serve-llm-interval*.yaml; refused/*.txt as expected"
 
 # global.scaleOut.mode=keda, with the values files the operator includes in that case.
 value_files AWS --set global.scaleOut.mode=keda

@@ -62,6 +62,16 @@ writes each only when it differs from the default)::
                                    # share a GPU.
     metrics_port: 8080             # Ray's Prometheus metrics (ray.init)
 
+How Ray Serve LLM sends a streamed answer, and its default (the chart writes
+it only when it differs from the default)::
+
+    stream_batching_interval_ms: 0  # 0: each token as soon as vLLM gives it.
+                                    # A number of milliseconds: the tokens
+                                    # of that interval in one write. null:
+                                    # Ray Serve LLM's own setting (variable
+                                    # RAYLLM_MODEL_RESPONSE_BATCH_TIMEOUT_MS,
+                                    # 50 when unset).
+
 Environment overrides (a variable that is unset or empty changes nothing):
 ``RHVP_MODEL_ID``, ``RHVP_MODEL_SOURCE``, ``RHVP_MODEL_REVISION``,
 ``RHVP_GPU_MEMORY_UTILIZATION``, ``RHVP_MAX_MODEL_LEN``. If
@@ -76,6 +86,7 @@ import argparse
 import copy
 import json
 import logging
+import math
 import os
 import re
 import signal
@@ -102,6 +113,10 @@ SCALE_POLL_INTERVAL_S = 1.0
 # the room left then grows with the number of replicas. The chart and scripts/pattern_settings.py refuse the same
 # before a sync, and the comparison's plan.py (SHARED_GPU_RESERVE) for its two replicas.
 SHARED_GPU_RESERVE = 0.025
+# Ray Serve LLM's own setting for how often it sends a streamed answer's tokens (milliseconds, read once when Ray
+# Serve LLM is imported; 50 when unset). LLMConfig.experimental_configs["stream_batching_interval_ms"] overrides it
+# when that key is set; stream_batching_interval_ms: null leaves it in charge.
+RAY_STREAM_INTERVAL_VAR = "RAYLLM_MODEL_RESPONSE_BATCH_TIMEOUT_MS"
 # Replica states that count towards the target when Ray reports no target.
 LIVE_REPLICA_STATES = ("STARTING", "UPDATING", "RECOVERING", "RUNNING", "PENDING_MIGRATION")
 
@@ -123,6 +138,7 @@ DEFAULTS: Dict[str, Any] = {
     "http_host": "0.0.0.0",
     "http_port": 8000,
     "metrics_port": 8080,
+    "stream_batching_interval_ms": 0,
 }
 KNOWN_KEYS = frozenset(DEFAULTS) | frozenset(REQUIRED_KEYS)
 
@@ -622,6 +638,12 @@ def _validate(cfg: Dict[str, Any]) -> Dict[str, Any]:
     if not _is_int(metrics) or not 1 <= metrics <= 65535 or metrics == port:
         raise ConfigError(f"metrics_port must be an integer in 1..65535 other than http_port, got {metrics!r}")
     out["metrics_port"] = metrics
+    interval = cfg.get("stream_batching_interval_ms")
+    if interval is not None and not (_is_number(interval) and math.isfinite(interval) and interval >= 0):
+        raise ConfigError(
+            f"stream_batching_interval_ms must be null or a number of milliseconds of at least 0, got {interval!r}"
+        )
+    out["stream_batching_interval_ms"] = interval
     return out
 
 
@@ -693,7 +715,40 @@ def build_llm_config_kwargs(cfg: Mapping[str, Any]) -> Dict[str, Any]:
         # LLMConfig.runtime_env goes on the replica's own runtime_env (LLMServer.get_deployment_options), and the
         # engine process inherits it.
         kwargs["runtime_env"] = {"env_vars": {"VLLM_RAY_PER_WORKER_GPUS": str(share)}}
+    if cfg.get("stream_batching_interval_ms") is not None:
+        # Ray Serve LLM 2.60.0 (LLMServer._get_batch_interval_ms) uses this key when it is set, and
+        # RAYLLM_MODEL_RESPONSE_BATCH_TIMEOUT_MS (default 50) otherwise. At 0 its Batcher passes each token on as
+        # vLLM yields it; above 0 it waits that long before each write, the first one included.
+        kwargs["experimental_configs"] = {"stream_batching_interval_ms": cfg["stream_batching_interval_ms"]}
     return kwargs
+
+
+def stream_interval_text(cfg: Mapping[str, Any], env: Mapping[str, str]) -> str:
+    """The start-up log's line for ``stream_batching_interval_ms``."""
+    interval = cfg.get("stream_batching_interval_ms")
+    if interval is None:
+        raw = (env.get(RAY_STREAM_INTERVAL_VAR) or "").strip()
+        return (f"stream_batching_interval_ms=null: Ray Serve LLM's own setting "
+                f"({RAY_STREAM_INTERVAL_VAR}={raw or 'unset, so 50'})")
+    return f"stream_batching_interval_ms={interval:g}"
+
+
+def stream_interval_note(cfg: Mapping[str, Any], env: Mapping[str, str]) -> Optional[str]:
+    """A warning when RAYLLM_MODEL_RESPONSE_BATCH_TIMEOUT_MS is set to another value than the
+    ``stream_batching_interval_ms`` that overrides it, else None."""
+    raw = (env.get(RAY_STREAM_INTERVAL_VAR) or "").strip()
+    interval = cfg.get("stream_batching_interval_ms")
+    if not raw or interval is None:
+        return None
+    try:
+        if float(raw) == float(interval):
+            return None
+    except ValueError:
+        pass
+    return (
+        f"{RAY_STREAM_INTERVAL_VAR}={raw} is set, but stream_batching_interval_ms ({interval:g}) overrides it; "
+        f"set stream_batching_interval_ms to null to use the variable"
+    )
 
 
 def object_store_bytes(cfg: Mapping[str, Any]) -> int:
@@ -1023,6 +1078,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         cfg["gpu_per_replica"],
         cfg["metrics_port"],
     )
+    log.info("%s", stream_interval_text(cfg, os.environ))
+    note = stream_interval_note(cfg, os.environ)
+    if note:
+        log.warning("%s", note)
 
     import ray
     from ray import serve

@@ -65,6 +65,7 @@ def test_defaults_change_nothing():
     assert "minReplicas" not in server and "maxReplicas" not in server
     assert server["gpuPerReplica"] == 1 and server["gpuCount"] == 1
     assert server["metricsPort"] == 8080
+    assert server["streamBatchingIntervalMs"] == 0
     assert SERVER_VALUES["compileCache"]["mode"] == "none"
     assert SERVER_VALUES["modelStorage"]["accessMode"] == "ReadWriteOnce"
     assert set(SERVER_VALUES["scaleOut"]) >= {"minPods", "maxPods", "waitingRequestsPerPod", "pollingIntervalSeconds",
@@ -82,6 +83,9 @@ def test_values_check_names_every_mode():
 
 
 # ---- the rules ------------------------------------------------------------------------------
+
+
+STREAM_INTERVAL = "server.streamBatchingIntervalMs must be null or a number of milliseconds of at least 0"
 
 
 @pytest.mark.parametrize("over, message", [
@@ -108,6 +112,12 @@ def test_values_check_names_every_mode():
     ({"server": {"gpuPerReplica": 0}}, "server.gpuPerReplica must be a number above 0"),
     ({"server": {"gpuPerReplica": "0.5"}}, "server.gpuPerReplica must be a number above 0; got 0.5 (string)"),
     ({"server": {"metricsPort": 8000}}, "server.metricsPort must be a port number"),
+    ({"server": {"streamBatchingIntervalMs": -1}}, STREAM_INTERVAL + "; got -1 (float64)"),
+    ({"server": {"streamBatchingIntervalMs": -0.5}}, STREAM_INTERVAL + "; got -0.5 (float64)"),
+    ({"server": {"streamBatchingIntervalMs": "50"}}, STREAM_INTERVAL + "; got 50 (string)"),
+    ({"server": {"streamBatchingIntervalMs": True}}, STREAM_INTERVAL + "; got true (bool)"),
+    ({"server": {"streamBatchingIntervalMs": float("nan")}}, STREAM_INTERVAL + "; got nan (float64)"),
+    ({"server": {"streamBatchingIntervalMs": float("inf")}}, STREAM_INTERVAL + "; got inf (float64)"),
     ({"compileCache": {"mode": "disk"}}, "compileCache.mode must be none, node or shared"),
     ({"modelStorage": {"accessMode": "ReadOnlyMany"}}, "modelStorage.accessMode must be ReadWriteOnce or ReadWriteMany"),
     ({"global": {"scaleOut": {"mode": "keda"}}, "scaleOut": {"maxPods": 0}}, "scaleOut.maxPods must be a whole number"),
@@ -171,6 +181,10 @@ def test_the_shared_gpu_reserve_grows_with_the_replica_count(replicas, share, me
     {"global": {"scaleOut": {"mode": "keda"}}, "modelStorage": {"accessMode": "ReadWriteMany"}},
     {"compileCache": {"mode": "shared"}},
     {"global": {"compare": {"mode": "scaleout"}}},
+    {"server": {"streamBatchingIntervalMs": 0.0}},
+    {"server": {"streamBatchingIntervalMs": 12.5}},
+    {"server": {"streamBatchingIntervalMs": 50}},
+    {"server": {"streamBatchingIntervalMs": None}},
 ])
 def test_values_check_accepts(over):
     assert pattern_settings.check(chart_values(**over)) == []
@@ -217,6 +231,8 @@ def test_values_check_runs_in_validate_values(tmp_path):
     ("keda-thanos-url", "scaleOut.thanosUrl must be an http:// or https:// address; got thanos-querier:9092"),
     ("keda-cooldown", "scaleOut.cooldownSeconds must be a whole number from 0 to 3600; got 7200"),
     ("replicas-moved", pattern_settings.MOVED),
+    ("stream-interval-string", STREAM_INTERVAL + "; got 50 (string)"),
+    ("stream-interval-negative", STREAM_INTERVAL + "; got -5 (float64)"),
     ("compare-mode-unknown",
      "global.compare.mode must be levels or scaleout; got surge"),
 ])

@@ -13,6 +13,7 @@ or an empty list. Standard library only.
 
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Mapping
 
@@ -104,8 +105,8 @@ def check_global(values: Mapping) -> list[str]:
 
 def check_server(values: Mapping) -> list[str]:
     """The server chart's own settings: server.autoscaling, server.gpuPerReplica (and, when replicas share a GPU,
-    server.engineKwargs.gpu_memory_utilization), server.metricsPort, compileCache, modelStorage.accessMode and, in
-    keda mode, scaleOut."""
+    server.engineKwargs.gpu_memory_utilization), server.metricsPort, server.streamBatchingIntervalMs, compileCache,
+    modelStorage.accessMode and, in keda mode, scaleOut."""
     out = []
     server = values.get("server") or {}
     if "minReplicas" in server or "maxReplicas" in server:
@@ -155,6 +156,11 @@ def check_server(values: Mapping) -> list[str]:
     if not (_whole(port) and 1 <= port <= 65535 and port != server.get("httpPort")):
         out.append(f"server.metricsPort must be a port number (1 to 65535) other than server.httpPort; got "
                    f"{_show(port)} ({_kind(port)})")
+        return out
+    interval = server.get("streamBatchingIntervalMs")
+    if interval is not None and not (_number(interval) and math.isfinite(interval) and interval >= 0):
+        out.append(f"server.streamBatchingIntervalMs must be null or a number of milliseconds of at least 0; got "
+                   f"{_show(interval)} ({_kind(interval)})")
         return out
     cache = (values.get("compileCache") or {}).get("mode")
     if not (isinstance(cache, str) and cache in COMPILE_CACHE_MODES):

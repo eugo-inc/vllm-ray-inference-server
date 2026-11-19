@@ -88,6 +88,7 @@ def test_contract_file_loads_unchanged(tmp_path):
         "http_host": "0.0.0.0",
         "http_port": 8000,
         "metrics_port": 8080,
+        "stream_batching_interval_ms": 0,
     }
 
 
@@ -281,6 +282,7 @@ def test_llm_config_kwargs_for_the_contract_file(tmp_path):
             "revision": REV,
         },
         "deployment_config": {"autoscaling_config": {"min_replicas": 1, "max_replicas": 1}},
+        "experimental_configs": {"stream_batching_interval_ms": 0},
     }
     # accelerator_type is omitted when null; LLMConfig's default is None.
     assert "accelerator_type" not in kwargs
@@ -465,9 +467,92 @@ def test_chart_defaults_are_the_servers():
     # gpu_per_replica null means one GPU per worker; the chart's default has one worker.
     assert values["engineKwargs"]["tensor_parallel_size"] == 1 and values["gpuPerReplica"] == 1
     assert values["metricsPort"] == defaults["metrics_port"] == 8080
+    assert values["streamBatchingIntervalMs"] == defaults["stream_batching_interval_ms"] == 0
     template = (REPO / "charts/all/ray-serve-llm/templates/configmap.yaml").read_text()
     assert "(ne (float64 $share) 1.0)" in template and "(ne (float64 $metrics) 8080.0)" in template
+    assert "(eq (float64 $interval) 0.0)" in template
     assert "rhvp_scale.py" in re.search(r"^COPY .*serve_app\.py.*$", CONTAINERFILE, re.M).group(0)
+
+
+# --------------------------------------------------------------------------
+# How Ray Serve LLM sends a streamed answer (stream_batching_interval_ms)
+# --------------------------------------------------------------------------
+
+STREAM_VAR = "RAYLLM_MODEL_RESPONSE_BATCH_TIMEOUT_MS"
+STREAM_REFUSAL = "stream_batching_interval_ms must be null or a number of milliseconds of at least 0"
+
+
+def test_stream_interval_default_sends_each_token_at_once(tmp_path):
+    """0 is the default: Ray Serve LLM's Batcher then passes each token on as vLLM yields it."""
+    assert serve_app.DEFAULTS["stream_batching_interval_ms"] == 0
+    cfg = load_config(write(tmp_path, "model_id: m\nmodel_source: org/m\n"), {})
+    assert cfg["stream_batching_interval_ms"] == 0
+    assert build_llm_config_kwargs(cfg)["experimental_configs"] == {"stream_batching_interval_ms": 0}
+
+
+@pytest.mark.parametrize("value", [0, 0.0, 1, 12.5, 50, 1000])
+def test_stream_interval_reaches_ray_serve_llm(tmp_path, value):
+    cfg = load_config(write(tmp_path, contract_with(stream_batching_interval_ms=value)), {})
+    assert cfg["stream_batching_interval_ms"] == value
+    assert build_llm_config_kwargs(cfg)["experimental_configs"] == {"stream_batching_interval_ms": value}
+
+
+def test_null_stream_interval_leaves_ray_serve_llm_its_own_setting(tmp_path):
+    """null passes no key: Ray Serve LLM then reads its own variable (50 ms when unset)."""
+    cfg = load_config(write(tmp_path, contract_with(stream_batching_interval_ms=None)), {})
+    assert cfg["stream_batching_interval_ms"] is None
+    assert "experimental_configs" not in build_llm_config_kwargs(cfg)
+
+
+@pytest.mark.parametrize("value", [-1, -0.5, "50", "", "null", True, False, float("nan"), float("inf"),
+                                   float("-inf"), [0], {"ms": 0}])
+def test_invalid_stream_interval_is_rejected(tmp_path, value):
+    with pytest.raises(ConfigError, match=STREAM_REFUSAL):
+        load_config(write(tmp_path, contract_with(stream_batching_interval_ms=value)), {})
+
+
+def test_stream_interval_is_not_an_env_override(tmp_path):
+    """Ray Serve LLM's own variable does not change the config: the key overrides it inside Ray Serve LLM."""
+    cfg = load_config(write(tmp_path, CONTRACT_YAML), {STREAM_VAR: "50"})
+    assert cfg["stream_batching_interval_ms"] == 0
+    assert serve_app.RAY_STREAM_INTERVAL_VAR == STREAM_VAR
+
+
+@pytest.mark.parametrize(
+    "env, interval, text",
+    [
+        ({}, 0, "stream_batching_interval_ms=0"),
+        ({STREAM_VAR: "50"}, 12.5, "stream_batching_interval_ms=12.5"),
+        ({}, None, f"stream_batching_interval_ms=null: Ray Serve LLM's own setting ({STREAM_VAR}=unset, so 50)"),
+        ({STREAM_VAR: "  "}, None, f"({STREAM_VAR}=unset, so 50)"),
+        ({STREAM_VAR: " 20 "}, None, f"({STREAM_VAR}=20)"),
+    ],
+)
+def test_stream_interval_start_line(env, interval, text):
+    assert text in serve_app.stream_interval_text({"stream_batching_interval_ms": interval}, env)
+
+
+@pytest.mark.parametrize(
+    "env, interval, warned",
+    [
+        ({}, 0, False),
+        ({STREAM_VAR: ""}, 0, False),
+        ({STREAM_VAR: "0"}, 0, False),
+        ({STREAM_VAR: "0.0"}, 0, False),
+        ({STREAM_VAR: "12.5"}, 12.5, False),
+        ({STREAM_VAR: "50"}, None, False),
+        ({STREAM_VAR: "50"}, 0, True),
+        ({STREAM_VAR: " 50 "}, 12.5, True),
+        ({STREAM_VAR: "fifty"}, 0, True),
+    ],
+)
+def test_stream_interval_note_when_ray_serve_llms_variable_is_overridden(env, interval, warned):
+    note = serve_app.stream_interval_note({"stream_batching_interval_ms": interval}, env)
+    assert (note is not None) is warned
+    if warned:
+        assert note.startswith(f"{STREAM_VAR}={env[STREAM_VAR].strip()} is set")
+        assert f"stream_batching_interval_ms ({interval:g}) overrides it" in note
+        assert "set stream_batching_interval_ms to null to use the variable" in note
 
 
 # --------------------------------------------------------------------------
@@ -711,6 +796,7 @@ def test_main_print_config_needs_no_ray(tmp_path, monkeypatch, capsys):
     assert serve_app.main(["--config", path, "--print-config"]) == 0
     out = json.loads(capsys.readouterr().out)
     assert out["llm_config"]["engine_kwargs"]["revision"] == REV
+    assert out["llm_config"]["experimental_configs"] == {"stream_batching_interval_ms": 0}
     assert out["config"]["app_name"] == "llm"
     assert not stale.exists(), "a stale ready file must be removed at start"
     assert "HF_TOKEN" not in serve_app.os.environ

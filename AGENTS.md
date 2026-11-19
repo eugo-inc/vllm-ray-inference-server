@@ -167,7 +167,14 @@ edit them by hand; `patternizer upgrade` rewrites them. You may add targets to `
 3. It starts Ray with a 2 GiB object store and its Prometheus metrics on port 8080 (`metrics_port`), checks that
    Ray sees enough GPUs for `max_replicas` replicas (exit 2 when it does not and `max_replicas` is above 1), starts
    Serve on `0.0.0.0:8000`, and runs the Ray Serve LLM app `llm`. `serve.run` returns once the app is RUNNING,
-   which means the model is loaded.
+   which means the model is loaded. `stream_batching_interval_ms` goes to `LLMConfig.experimental_configs`, from
+   which Ray Serve LLM reads how long it collects a streamed answer's tokens before each write (0: every token as
+   vLLM yields it); with `null` the key is left out, and Ray Serve LLM's `RAYLLM_MODEL_RESPONSE_BATCH_TIMEOUT_MS`
+   (read when Ray Serve LLM is imported; 50 when unset) decides. The server logs the interval it passes, and a
+   warning when that variable is set to a value other than the key's, which overrides it. Checked on CPU only, in
+   images with Ray 2.60.0 and a Ray 2.61 development build: the rendered `llm.yaml` gave Ray Serve LLM's own
+   `LLMServer` an interval of 0 by default (also with the variable at 50), 12.5 when set to 12.5, and with `null`
+   the variable's value (50 when unset); not with a running engine, and not with many streams at once.
 4. It then writes the ready file `/tmp/r/rhvp-ready` and waits for SIGTERM. Until then it checks the app every 10
    seconds (every second while `max_replicas` is above `min_replicas`): it removes the ready file when the app stops
    being RUNNING, and logs one `rhvp-scale` line for each replica count that changed. Adding or removing a replica
@@ -195,6 +202,8 @@ http_port: 8000
 # target_ongoing_requests: null  # server.autoscaling.targetOngoingRequests; required when max_replicas > 1
 # gpu_per_replica: null          # server.gpuPerReplica; null: one GPU per tensor- and pipeline-parallel worker
 # metrics_port: 8080             # server.metricsPort
+# stream_batching_interval_ms: 0 # server.streamBatchingIntervalMs; 0: each streamed token as vLLM generates it,
+#                                # a number: milliseconds per write, null: Ray Serve LLM's own setting
 ```
 
 `serve_app.py` refuses a config it cannot run, with a message that names the key: among others a `max_replicas`
@@ -203,8 +212,9 @@ worker count of a tensor-parallel replica (or above 1 for a replica with one wor
 GPU, a `gpu_memory_utilization` above `gpu_per_replica` minus 0.025 (`SHARED_GPU_RESERVE`, the same 0.025 in the
 chart, `scripts/pattern_settings.py` and the comparison's `plan.SHARED_GPU_RESERVE`; tested together in
 `tests/test_scaleout_contract.py`). The reserve is per replica, so the memory left free grows with the replicas on a
-GPU, for each one's CUDA context; 0.025 of the GPU is an estimate of that context, not a measurement. The chart and
-`scripts/pattern_settings.py` refuse the same settings before a sync.
+GPU, for each one's CUDA context; 0.025 of the GPU is an estimate of that context, not a measurement. It also refuses a
+`stream_batching_interval_ms` that is neither `null` nor a number of at least 0 (text such as `"50"`, a boolean and a
+negative number among them). The chart and `scripts/pattern_settings.py` refuse the same settings before a sync.
 
 Server container environment:
 
@@ -260,6 +270,11 @@ and uses a serving certificate; the Route uses `reencrypt` termination.
   GuideLLM as its own child process, reads GPU power from the Thanos Querier, deletes the pod and saves
   `results.json`. A side's `args` follow its preset's own: `vllm serve` flags for `vllm-openai`, and vLLM engine
   arguments in the server's own syntax for `ray-serve-llm` (`serve_app.engine_flags`, "How the server starts").
+  The `ray-serve-llm` preset also starts a side with `RAYLLM_MODEL_RESPONSE_BATCH_TIMEOUT_MS=0` and writes
+  `stream_batching_interval_ms: null` into its `llm.yaml` (`plan.side_spec`, `plan.llm_yaml`), so the side sends
+  each streamed token as it is generated, as the chart's server does by default, and so does a side on an older
+  image, whose `serve_app.py` ignores the key with a warning and leaves the variable to decide. A side's own `env`
+  replaces the variable's value.
   GuideLLM starts only after the side has listed the model on `GET /v1/models` and answered a streamed request
   (`probe`), and its backend carries `validate_backend=false` (`guidellm._backend`, both modes): GuideLLM v0.8.1's
   own check is `GET <target>/health` by default, and Ray Serve LLM's OpenAI app has no `/health` route, so with the

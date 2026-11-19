@@ -83,6 +83,10 @@
 {{- if not (and (include "ray-serve-llm.isWhole" $srv.metricsPort) (ge (float64 $srv.metricsPort) 1.0) (le (float64 $srv.metricsPort) 65535.0) (ne (float64 $srv.metricsPort) (float64 $srv.httpPort))) -}}
 {{- fail (printf "server.metricsPort must be a port number (1 to 65535) other than server.httpPort; got %v (%s)" $srv.metricsPort (kindOf $srv.metricsPort)) -}}
 {{- end -}}
+{{- $interval := $srv.streamBatchingIntervalMs -}}
+{{- if not (or (kindIs "invalid" $interval) (and (include "ray-serve-llm.isNumber" $interval) (ge (float64 $interval) 0.0))) -}}
+{{- fail (printf "server.streamBatchingIntervalMs must be null or a number of milliseconds of at least 0; got %v (%s)" $interval (kindOf $interval)) -}}
+{{- end -}}
 {{- $cache := (.Values.compileCache | default dict).mode -}}
 {{- if not (and (kindIs "string" $cache) (has $cache (list "none" "node" "shared"))) -}}
 {{- fail (printf "compileCache.mode must be none, node or shared; got %v" $cache) -}}
