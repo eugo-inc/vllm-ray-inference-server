@@ -704,12 +704,16 @@ def side_spec(plan: Mapping, side: Mapping) -> dict:
         command = command or ["/opt/app-root/src/entrypoint.sh"]
         llm_config = True
         # Ray Serve LLM's own switch for sending each streamed token as soon as it is generated (its default is a
-        # write every 50 ms). llm_yaml leaves stream_batching_interval_ms null, so this variable decides on every
-        # image of the server, including ones built before that key existed; a side's env can set another value.
+        # write every 50 ms). RHVP_STREAM_BATCHING_INTERVAL_MS=null sets stream_batching_interval_ms to null over
+        # whatever llm.yaml the side reads: on docker llm_yaml's (null already), on OpenShift the live server's
+        # ConfigMap (kube.py), which may hold another value. So the variable decides on every image of the server,
+        # including ones built before that key existed (they ignore the key and the new variable); a side's env
+        # can set either to another value.
         env.update({"RHVP_CONFIG": "/config/llm.yaml", "RAY_TMPDIR": "/tmp/r", "RHVP_MODEL_ID": model["id"],
                     "RHVP_MODEL_SOURCE": model["source"], "RHVP_MODEL_REVISION": model["revision"],
                     "RHVP_GPU_MEMORY_UTILIZATION": str(server["gpu_memory_utilization"]),
                     "RHVP_MAX_MODEL_LEN": str(server["max_model_len"]),
+                    "RHVP_STREAM_BATCHING_INTERVAL_MS": "null",
                     "RAYLLM_MODEL_RESPONSE_BATCH_TIMEOUT_MS": "0"})
     elif side["preset"] == "guidellm-mock":
         command = command or ["guidellm", "mock-server"]
@@ -722,9 +726,11 @@ def side_spec(plan: Mapping, side: Mapping) -> dict:
 
 def llm_yaml(plan: Mapping) -> str:
     """llm.yaml for the pattern's own Ray Serve LLM image, from the plan's model and server settings (JSON is
-    valid YAML, so no YAML library is needed). stream_batching_interval_ms is null, so the side's
-    RAYLLM_MODEL_RESPONSE_BATCH_TIMEOUT_MS (0 from side_spec) sets it; an image built before the key existed logs
-    that it ignores the key, and the variable sets the interval there too."""
+    valid YAML, so no YAML library is needed). The docker backend mounts it; on OpenShift a side reads the live
+    server's ConfigMap instead. stream_batching_interval_ms is null, as side_spec's RHVP_STREAM_BATCHING_INTERVAL_MS
+    also makes it on either backend, so the side's RAYLLM_MODEL_RESPONSE_BATCH_TIMEOUT_MS (0 from side_spec) sets
+    the interval; an image built before the key existed logs that it ignores the key, and the variable sets the
+    interval there too."""
     model, server = plan["model"], plan["server"]
     config = {"app_name": "llm", "model_id": model["id"], "model_source": model["source"],
               "model_revision": model["revision"] or None,

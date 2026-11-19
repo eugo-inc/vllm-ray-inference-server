@@ -479,7 +479,8 @@ def test_chart_defaults_are_the_servers():
 # --------------------------------------------------------------------------
 
 STREAM_VAR = "RAYLLM_MODEL_RESPONSE_BATCH_TIMEOUT_MS"
-STREAM_REFUSAL = "stream_batching_interval_ms must be null or a number of milliseconds of at least 0"
+STREAM_REFUSAL = "stream_batching_interval_ms must be null, 0, or a number of milliseconds from 0.001 to 60000"
+INTERVAL_VAR = "RHVP_STREAM_BATCHING_INTERVAL_MS"
 
 
 def test_stream_interval_default_sends_each_token_at_once(tmp_path):
@@ -490,7 +491,7 @@ def test_stream_interval_default_sends_each_token_at_once(tmp_path):
     assert build_llm_config_kwargs(cfg)["experimental_configs"] == {"stream_batching_interval_ms": 0}
 
 
-@pytest.mark.parametrize("value", [0, 0.0, 1, 12.5, 50, 1000])
+@pytest.mark.parametrize("value", [0, 0.0, 0.001, 1, 12.5, 50, 1000, 60000])
 def test_stream_interval_reaches_ray_serve_llm(tmp_path, value):
     cfg = load_config(write(tmp_path, contract_with(stream_batching_interval_ms=value)), {})
     assert cfg["stream_batching_interval_ms"] == value
@@ -505,17 +506,66 @@ def test_null_stream_interval_leaves_ray_serve_llm_its_own_setting(tmp_path):
 
 
 @pytest.mark.parametrize("value", [-1, -0.5, "50", "", "null", True, False, float("nan"), float("inf"),
-                                   float("-inf"), [0], {"ms": 0}])
+                                   float("-inf"), [0], {"ms": 0},
+                                   # Below 0.001 or above 60000: the chart would write some of these in exponent
+                                   # form (1e-7, 1e+21), which the YAML reader takes as text.
+                                   1e-7, 0.0005, 60000.5, 1e21, 10**400])
 def test_invalid_stream_interval_is_rejected(tmp_path, value):
     with pytest.raises(ConfigError, match=STREAM_REFUSAL):
         load_config(write(tmp_path, contract_with(stream_batching_interval_ms=value)), {})
 
 
-def test_stream_interval_is_not_an_env_override(tmp_path):
+def test_ray_serve_llms_variable_does_not_change_the_config(tmp_path):
     """Ray Serve LLM's own variable does not change the config: the key overrides it inside Ray Serve LLM."""
     cfg = load_config(write(tmp_path, CONTRACT_YAML), {STREAM_VAR: "50"})
     assert cfg["stream_batching_interval_ms"] == 0
     assert serve_app.RAY_STREAM_INTERVAL_VAR == STREAM_VAR
+
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [("null", None), ("NULL", None), (" Null ", None), ("12.5", 12.5), ("50", 50), ("0", 0), ("0.001", 0.001)],
+)
+def test_stream_interval_env_override_beats_the_file(tmp_path, raw, expected):
+    """RHVP_STREAM_BATCHING_INTERVAL_MS replaces the file's value, as on a comparison side reading the live
+    server's ConfigMap; null leaves Ray Serve LLM its own setting."""
+    cfg = load_config(write(tmp_path, contract_with(stream_batching_interval_ms=50)), {INTERVAL_VAR: raw})
+    assert cfg["stream_batching_interval_ms"] == expected
+    kwargs = build_llm_config_kwargs(cfg)
+    if expected is None:
+        assert "experimental_configs" not in kwargs
+    else:
+        assert kwargs["experimental_configs"] == {"stream_batching_interval_ms": expected}
+
+
+@pytest.mark.parametrize("raw", ["", "  "])
+def test_empty_stream_interval_env_override_is_ignored(tmp_path, raw):
+    cfg = load_config(write(tmp_path, contract_with(stream_batching_interval_ms=50)), {INTERVAL_VAR: raw})
+    assert cfg["stream_batching_interval_ms"] == 50
+
+
+def test_stream_interval_env_override_must_be_a_number_or_null(tmp_path):
+    with pytest.raises(ConfigError, match=f"{INTERVAL_VAR}='fifty' is not a valid number of milliseconds or null"):
+        load_config(write(tmp_path, CONTRACT_YAML), {INTERVAL_VAR: "fifty"})
+
+
+@pytest.mark.parametrize("raw", ["-1", "nan", "inf", "1e-7", "60001"])
+def test_stream_interval_env_override_is_range_checked(tmp_path, raw):
+    with pytest.raises(ConfigError, match=STREAM_REFUSAL):
+        load_config(write(tmp_path, CONTRACT_YAML), {INTERVAL_VAR: raw})
+
+
+@pytest.mark.parametrize("raw", ["", "  ", "fifty", "50ms"])
+def test_ray_serve_llms_variable_must_be_a_number(tmp_path, raw):
+    """Ray Serve LLM reads its variable with float() when it is imported and fails on anything else, so the
+    server refuses it before it says anything about the interval."""
+    with pytest.raises(ConfigError, match=f"{STREAM_VAR}={raw!r} is not a number: Ray Serve LLM fails to import"):
+        load_config(write(tmp_path, CONTRACT_YAML), {STREAM_VAR: raw})
+
+
+@pytest.mark.parametrize("raw", [" 50 ", "0", "12.5", "1e3"])
+def test_ray_serve_llms_variable_accepts_what_float_accepts(tmp_path, raw):
+    assert load_config(write(tmp_path, CONTRACT_YAML), {STREAM_VAR: raw})["stream_batching_interval_ms"] == 0
 
 
 @pytest.mark.parametrize(
@@ -524,7 +574,7 @@ def test_stream_interval_is_not_an_env_override(tmp_path):
         ({}, 0, "stream_batching_interval_ms=0"),
         ({STREAM_VAR: "50"}, 12.5, "stream_batching_interval_ms=12.5"),
         ({}, None, f"stream_batching_interval_ms=null: Ray Serve LLM's own setting ({STREAM_VAR}=unset, so 50)"),
-        ({STREAM_VAR: "  "}, None, f"({STREAM_VAR}=unset, so 50)"),
+        ({STREAM_VAR: "50.0"}, None, f"({STREAM_VAR}=50.0)"),
         ({STREAM_VAR: " 20 "}, None, f"({STREAM_VAR}=20)"),
     ],
 )
@@ -536,14 +586,14 @@ def test_stream_interval_start_line(env, interval, text):
     "env, interval, warned",
     [
         ({}, 0, False),
-        ({STREAM_VAR: ""}, 0, False),
+        ({STREAM_VAR: "0e0"}, 0, False),
         ({STREAM_VAR: "0"}, 0, False),
         ({STREAM_VAR: "0.0"}, 0, False),
         ({STREAM_VAR: "12.5"}, 12.5, False),
         ({STREAM_VAR: "50"}, None, False),
         ({STREAM_VAR: "50"}, 0, True),
         ({STREAM_VAR: " 50 "}, 12.5, True),
-        ({STREAM_VAR: "fifty"}, 0, True),
+        ({STREAM_VAR: "1e3"}, 0, True),
     ],
 )
 def test_stream_interval_note_when_ray_serve_llms_variable_is_overridden(env, interval, warned):

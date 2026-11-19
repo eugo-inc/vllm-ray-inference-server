@@ -265,6 +265,9 @@ def test_default_render_leaves_the_stream_interval_to_the_server(server, tmp_pat
 @pytest.mark.parametrize("name, written, kwargs", [
     ("interval", 12.5, {"stream_batching_interval_ms": 12.5}),
     ("interval-null", None, None),
+    # The bounds the chart, the values check and the server share: toJson writes both as plain decimals.
+    ("interval-min", 0.001, {"stream_batching_interval_ms": 0.001}),
+    ("interval-max", 60000, {"stream_batching_interval_ms": 60000}),
 ])
 def test_stream_interval_render_reaches_ray_serve_llm(server, render, tmp_path, name, written, kwargs):
     items = render_of(render, name)
@@ -282,6 +285,18 @@ def test_stream_interval_render_reaches_ray_serve_llm(server, render, tmp_path, 
     assert pod["metadata"]["annotations"][checksum] != default_pod["metadata"]["annotations"][checksum]
     assert env_map(container({"spec": {"template": pod}}, "server")) == env_map(
         container({"spec": {"template": default_pod}}, "server"))
+
+
+@pytest.mark.parametrize("name", ["interval", "interval-min", "interval-max"])
+def test_compare_side_override_makes_the_live_configmaps_interval_null(render, tmp_path, name):
+    """A comparison side on OpenShift reads the live server's ConfigMap; the side's
+    RHVP_STREAM_BATCHING_INTERVAL_MS=null leaves the choice to Ray Serve LLM's own variable whatever it holds."""
+    path = tmp_path / f"{name}.yaml"
+    path.write_text(llm_yaml(render_of(render, name)))
+    cfg = serve_app.load_config(str(path), {"RHVP_STREAM_BATCHING_INTERVAL_MS": "null",
+                                            "RAYLLM_MODEL_RESPONSE_BATCH_TIMEOUT_MS": "0"})
+    assert cfg["stream_batching_interval_ms"] is None
+    assert "experimental_configs" not in serve_app.build_llm_config_kwargs(cfg)
 
 
 @pytest.mark.parametrize("mode, access", [("node", "ReadWriteOnce"), ("shared", "ReadWriteMany")])

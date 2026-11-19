@@ -333,11 +333,11 @@ The `model` field is `global.model.id`. Any OpenAI-compatible client works with 
 
 **Streamed answers.** With `"stream": true`, the server sends each token as soon as vLLM generates it:
 `server.streamBatchingIntervalMs: 0` in `charts/all/ray-serve-llm/values.yaml`. Before this setting existed, the server
-used Ray Serve LLM's own default, which collects the tokens of each 50 ms into one write and so holds a stream's first
-token back until the first 50 ms are up. To send tokens that way again, set a number of milliseconds (`50` for that
-default), or `null` to leave the choice to Ray Serve LLM's own setting (its `RAYLLM_MODEL_RESPONSE_BATCH_TIMEOUT_MS`
-variable, 50 when it is unset). Fewer, larger writes may cost less CPU when many streams run at once; that has not been
-measured here.
+used Ray Serve LLM's own default, which sends what has arrived every 50 ms, so each token, the first one included, can
+wait up to 50 ms. To send tokens that way again, set a number of milliseconds from 0.001 to 60000 (`50` for that
+default), or `null` for Ray Serve LLM's own default, 50 ms (the chart does not set its
+`RAYLLM_MODEL_RESPONSE_BATCH_TIMEOUT_MS` variable). Fewer, larger writes may cost less CPU when many streams run at
+once; that has not been measured here.
 
 **Optional Route.** Set `route.enabled: true` in `charts/all/ray-serve-llm/values.yaml` in your fork and push. The
 Route raises the router timeout to 10 minutes. It has no authentication: anyone who can reach the cluster's router
@@ -696,12 +696,16 @@ under the same tag is not a new run: change the digest, or `runName`.
 Time to first token and inter-token latency are timed where GuideLLM receives the streamed text. A serving layer
 that sends several generated tokens in one streamed write moves the first token later and shortens the measured
 gaps between tokens, compared with a server that sends each token as it is generated. The `ray-serve-llm` preset
-starts its sides with `RAYLLM_MODEL_RESPONSE_BATCH_TIMEOUT_MS=0` and `stream_batching_interval_ms: null` in their
-`llm.yaml`, so they send each token as it is generated, as the pattern's server does by default ("Streamed answers",
-under "Using the API"). An image of the server built before that key existed ignores it with a warning, and the
-variable sets the same. A side's own `env` can set the variable to another value, such as `50`, Ray Serve LLM's own
-default; between such a side and a `vllm-openai` side these two figures can differ for that reason alone, and the
-comparison does not correct for it. Output tokens per second, over the whole level, is not timed per token.
+starts its sides with `RAYLLM_MODEL_RESPONSE_BATCH_TIMEOUT_MS=0` and `RHVP_STREAM_BATCHING_INTERVAL_MS=null`, so they
+send each token as it is generated, as the pattern's server does by default ("Streamed answers", under "Using the
+API"). The second variable sets the server's `stream_batching_interval_ms` to `null` whatever the side's `llm.yaml`
+holds, and Ray Serve LLM's variable then decides. With docker that file is the run's own, which also leaves the key
+`null`; on OpenShift a side reads the live server's ConfigMap, whose interval the variable replaces. An image of the
+server built before these settings existed ignores the key with a warning and does not know the second variable, and
+Ray Serve LLM's variable sets the same. A side's own `env` can set either variable to another value, such as
+`RAYLLM_MODEL_RESPONSE_BATCH_TIMEOUT_MS=50`, Ray Serve LLM's own default; between such a side and a `vllm-openai`
+side these two figures can differ for that reason alone, and the comparison does not correct for it. Output tokens
+per second, over the whole level, is not timed per token.
 
 ### What has not been checked
 

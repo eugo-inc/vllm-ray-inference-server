@@ -85,7 +85,8 @@ def test_values_check_names_every_mode():
 # ---- the rules ------------------------------------------------------------------------------
 
 
-STREAM_INTERVAL = "server.streamBatchingIntervalMs must be null or a number of milliseconds of at least 0"
+STREAM_INTERVAL = ("server.streamBatchingIntervalMs must be null, 0, or a number of milliseconds from 0.001 to "
+                   "60000")
 
 
 @pytest.mark.parametrize("over, message", [
@@ -118,6 +119,12 @@ STREAM_INTERVAL = "server.streamBatchingIntervalMs must be null or a number of m
     ({"server": {"streamBatchingIntervalMs": True}}, STREAM_INTERVAL + "; got true (bool)"),
     ({"server": {"streamBatchingIntervalMs": float("nan")}}, STREAM_INTERVAL + "; got nan (float64)"),
     ({"server": {"streamBatchingIntervalMs": float("inf")}}, STREAM_INTERVAL + "; got inf (float64)"),
+    # Outside 0.001 to 60000: the chart's toJson writes 1e-7 and 1e+21 in exponent form, read back as text.
+    ({"server": {"streamBatchingIntervalMs": 1e-7}}, STREAM_INTERVAL + "; got 1e-07 (float64)"),
+    ({"server": {"streamBatchingIntervalMs": 0.0005}}, STREAM_INTERVAL + "; got 0.0005 (float64)"),
+    ({"server": {"streamBatchingIntervalMs": 60000.5}}, STREAM_INTERVAL + "; got 60000.5 (float64)"),
+    ({"server": {"streamBatchingIntervalMs": 1e21}}, STREAM_INTERVAL + "; got "),
+    ({"server": {"streamBatchingIntervalMs": 10**400}}, STREAM_INTERVAL + "; got "),
     ({"compileCache": {"mode": "disk"}}, "compileCache.mode must be none, node or shared"),
     ({"modelStorage": {"accessMode": "ReadOnlyMany"}}, "modelStorage.accessMode must be ReadWriteOnce or ReadWriteMany"),
     ({"global": {"scaleOut": {"mode": "keda"}}, "scaleOut": {"maxPods": 0}}, "scaleOut.maxPods must be a whole number"),
@@ -184,6 +191,8 @@ def test_the_shared_gpu_reserve_grows_with_the_replica_count(replicas, share, me
     {"server": {"streamBatchingIntervalMs": 0.0}},
     {"server": {"streamBatchingIntervalMs": 12.5}},
     {"server": {"streamBatchingIntervalMs": 50}},
+    {"server": {"streamBatchingIntervalMs": 0.001}},
+    {"server": {"streamBatchingIntervalMs": 60000}},
     {"server": {"streamBatchingIntervalMs": None}},
 ])
 def test_values_check_accepts(over):
@@ -233,6 +242,8 @@ def test_values_check_runs_in_validate_values(tmp_path):
     ("replicas-moved", pattern_settings.MOVED),
     ("stream-interval-string", STREAM_INTERVAL + "; got 50 (string)"),
     ("stream-interval-negative", STREAM_INTERVAL + "; got -5 (float64)"),
+    ("stream-interval-tiny", STREAM_INTERVAL + "; got 1e-07 (float64)"),
+    ("stream-interval-huge", STREAM_INTERVAL + "; got 1e+21 (float64)"),
     ("compare-mode-unknown",
      "global.compare.mode must be levels or scaleout; got surge"),
 ])

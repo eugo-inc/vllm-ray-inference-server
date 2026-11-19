@@ -21,8 +21,9 @@
 #   charts/nvidia-gpu-config-timeslicing.yaml  with the opt-in GPU time-slicing on
 #   charts/ray-serve-llm-scaling.yaml  in-pod autoscaling from 1 to 2 replicas sharing the GPU
 #   charts/ray-serve-llm-cache-<mode>.yaml  compileCache.mode node and shared
-#   charts/ray-serve-llm-interval*.yaml  server.streamBatchingIntervalMs 12.5 and null (Ray Serve
-#                                LLM's own setting), away from its default 0
+#   charts/ray-serve-llm-interval*.yaml  server.streamBatchingIntervalMs 12.5, null (Ray Serve
+#                                LLM's own setting), and its bounds 0.001 and 60000, away from
+#                                its default 0
 #   charts/<chart>-keda.yaml     every chart with global.scaleOut.mode=keda and that case's
 #                                values files, and notebook-compare-keda.yaml with the
 #                                comparison on too
@@ -219,6 +220,11 @@ helm template ray-serve-llm charts/all/ray-serve-llm --namespace vllm-inference 
   --set-json server.streamBatchingIntervalMs=12.5 > "${RENDER_DIR}/charts/ray-serve-llm-interval.yaml"
 helm template ray-serve-llm charts/all/ray-serve-llm --namespace vllm-inference "${FARGS[@]}" "${SETS[@]}" \
   --set server.streamBatchingIntervalMs=null > "${RENDER_DIR}/charts/ray-serve-llm-interval-null.yaml"
+# The bounds the chart, the values check and the server share: written as plain decimals, which the server reads.
+helm template ray-serve-llm charts/all/ray-serve-llm --namespace vllm-inference "${FARGS[@]}" "${SETS[@]}" \
+  --set-json server.streamBatchingIntervalMs=0.001 > "${RENDER_DIR}/charts/ray-serve-llm-interval-min.yaml"
+helm template ray-serve-llm charts/all/ray-serve-llm --namespace vllm-inference "${FARGS[@]}" "${SETS[@]}" \
+  --set-json server.streamBatchingIntervalMs=60000 > "${RENDER_DIR}/charts/ray-serve-llm-interval-max.yaml"
 
 # Settings the charts must refuse: the render must fail, and say why.
 refuse() {
@@ -261,11 +267,18 @@ refuse gpu-per-replica-workers ray-serve-llm vllm-inference \
   --set-json server.gpuPerReplica=0.5 --set server.engineKwargs.tensor_parallel_size=2 --set server.gpuCount=2
 refuse replicas-moved ray-serve-llm vllm-inference "moved to server.autoscaling" --set server.maxReplicas=2
 refuse stream-interval-string ray-serve-llm vllm-inference \
-  "server.streamBatchingIntervalMs must be null or a number of milliseconds of at least 0; got 50 (string)" \
+  "server.streamBatchingIntervalMs must be null, 0, or a number of milliseconds from 0.001 to 60000; got 50 (string)" \
   --set-string server.streamBatchingIntervalMs=50
 refuse stream-interval-negative ray-serve-llm vllm-inference \
-  "server.streamBatchingIntervalMs must be null or a number of milliseconds of at least 0; got -5 (float64)" \
+  "server.streamBatchingIntervalMs must be null, 0, or a number of milliseconds from 0.001 to 60000; got -5 (float64)" \
   --set-json server.streamBatchingIntervalMs=-5
+# Values toJson would write in exponent form (1e-7, 1e+21), which the server's YAML reader takes as text.
+refuse stream-interval-tiny ray-serve-llm vllm-inference \
+  "server.streamBatchingIntervalMs must be null, 0, or a number of milliseconds from 0.001 to 60000; got 1e-07 (float64)" \
+  --set-json server.streamBatchingIntervalMs=1e-7
+refuse stream-interval-huge ray-serve-llm vllm-inference \
+  "server.streamBatchingIntervalMs must be null, 0, or a number of milliseconds from 0.001 to 60000; got 1e+21 (float64)" \
+  --set-json server.streamBatchingIntervalMs=1e21
 refuse compare-mode-unknown notebook vllm-notebook "global.compare.mode must be levels or scaleout" \
   --set global.compare.enabled=true --set global.compare.mode=surge
 refuse keda-threshold ray-serve-llm vllm-inference "scaleOut.waitingRequestsPerPod must be a number above 0" \

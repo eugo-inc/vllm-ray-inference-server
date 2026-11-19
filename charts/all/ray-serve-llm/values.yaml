@@ -73,12 +73,13 @@ server:
   # and the Service port, both named "metrics", are rendered only in keda mode.
   metricsPort: 8080
   # How Ray Serve LLM sends a streamed answer. 0: each token as soon as vLLM
-  # generates it. A number of milliseconds: the tokens of each such interval
-  # in one write, the first write included (Ray Serve LLM's own default is 50,
-  # which holds a stream's first token back until the first 50 ms are up).
-  # null: Ray Serve LLM's own setting (its RAYLLM_MODEL_RESPONSE_BATCH_TIMEOUT_MS
-  # variable, 50 when unset). Fewer, larger writes may cost less CPU with many
-  # streams at once; that has not been measured here.
+  # generates it. A number of milliseconds from 0.001 to 60000: what has
+  # arrived, in one write each time that long has passed, so each token, the
+  # first one included, can wait up to that long (Ray Serve LLM's own default
+  # is 50). null: Ray Serve LLM's own default, 50 ms (the chart does not set
+  # its RAYLLM_MODEL_RESPONSE_BATCH_TIMEOUT_MS variable). Fewer, larger writes
+  # may cost less CPU with many streams at once; that has not been measured
+  # here.
   streamBatchingIntervalMs: 0
   objectStoreMemoryGb: 2
   httpHost: 0.0.0.0

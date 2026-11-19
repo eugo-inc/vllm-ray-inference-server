@@ -811,6 +811,7 @@ def test_a_side_without_a_gpu_and_the_ray_preset():
 
 
 STREAM_VAR = "RAYLLM_MODEL_RESPONSE_BATCH_TIMEOUT_MS"
+INTERVAL_VAR = "RHVP_STREAM_BATCHING_INTERVAL_MS"
 
 
 def test_the_ray_preset_sends_each_streamed_token_at_once_unless_a_side_says_otherwise(tmp_path):
@@ -820,11 +821,13 @@ def test_the_ray_preset_sends_each_streamed_token_at_once_unless_a_side_says_oth
     plan = plans.build(config, "docker")
     a, b = (plans.side_spec(plan, side) for side in plan["sides"])
     assert (a["env"][STREAM_VAR], b["env"][STREAM_VAR]) == ("0", "50")
+    assert a["env"][INTERVAL_VAR] == b["env"][INTERVAL_VAR] == "null"
     for preset in ("vllm-openai", "guidellm-mock"):
         other = plans.build({**_plan_config(), "sides": [{"name": "a", "image": "x/a:1", "preset": preset},
                                                          {"name": "b", "image": "x/b:1", "preset": preset}]},
                             "docker")
         assert STREAM_VAR not in plans.side_spec(other, other["sides"][0])["env"], preset
+        assert INTERVAL_VAR not in plans.side_spec(other, other["sides"][0])["env"], preset
     # llm.yaml leaves the key null, so the side's variable sets the interval on every image of the server,
     # including images built before the key existed.
     llm = json.loads(plans.llm_yaml(plan))
@@ -840,6 +843,50 @@ def test_the_ray_preset_sends_each_streamed_token_at_once_unless_a_side_says_oth
     assert serve_app.stream_interval_text(cfg, a["env"]) == (
         f"stream_batching_interval_ms=null: Ray Serve LLM's own setting ({STREAM_VAR}=0)")
     assert serve_app.stream_interval_note(cfg, a["env"]) is None
+
+
+def test_an_openshift_ray_side_gets_the_stream_variables_in_its_pod():
+    """On OpenShift a side mounts the live server's ConfigMap, not llm_yaml, so the interval comes from the pod's
+    env: RHVP_STREAM_BATCHING_INTERVAL_MS=null and Ray Serve LLM's variable at 0, or what the side's env says."""
+    backend, _ = _side_backend()
+    config = _plan_config()
+    config["sides"] = [{"name": "a", "image": "x/a:1", "preset": "ray-serve-llm"},
+                       {"name": "b", "image": "x/b:1", "preset": "ray-serve-llm", "env": {STREAM_VAR: "50"}}]
+    plan = plans.build(config, "openshift")
+    backend.prepare(plan)
+    envs = []
+    for side, launch in zip(plan["sides"], plan["launches"][:2]):
+        body = backend.pod_body(plan, launch, side, plans.side_spec(plan, side))
+        assert {"name": "config", "configMap": {"name": "ray-serve-llm-config"}} in body["spec"]["volumes"]
+        envs.append({e["name"]: e.get("value") for e in body["spec"]["containers"][0]["env"]})
+    assert [(env[INTERVAL_VAR], env[STREAM_VAR]) for env in envs] == [("null", "0"), ("null", "50")]
+
+
+@pytest.mark.parametrize("configmap_value", [0, 12.5, 50, None])
+@pytest.mark.parametrize("side_env, expected, kwargs", [
+    ({}, None, None),
+    ({STREAM_VAR: "50"}, None, None),
+    ({INTERVAL_VAR: "12.5"}, 12.5, {"stream_batching_interval_ms": 12.5}),
+])
+def test_a_ray_side_sets_the_interval_whatever_the_live_configmap_holds(tmp_path, configmap_value, side_env,
+                                                                         expected, kwargs):
+    """The live server's ConfigMap may hold any interval; the side's env decides: null by default (Ray Serve LLM's
+    variable then sets it), or the side's own RHVP_STREAM_BATCHING_INTERVAL_MS."""
+    config = _plan_config()
+    config["sides"] = [{"name": "a", "image": "x/a:1", "preset": "ray-serve-llm", "env": side_env},
+                       {"name": "b", "image": "x/b:1", "preset": "ray-serve-llm"}]
+    plan = plans.build(config, "openshift")
+    env = plans.side_spec(plan, plan["sides"][0])["env"]
+    live = json.loads(plans.llm_yaml(plan))
+    live["stream_batching_interval_ms"] = configmap_value
+    path = tmp_path / "llm.yaml"
+    path.write_text(json.dumps(live))
+    sys.path.insert(0, str(ROOT / "inference-server"))
+    import serve_app
+
+    cfg = serve_app.load_config(str(path), env)
+    assert cfg["stream_batching_interval_ms"] == expected
+    assert serve_app.build_llm_config_kwargs(cfg).get("experimental_configs") == kwargs
 
 
 def _pod(phase="Pending", waiting=None, terminated=None, scheduled=None, ip=None) -> dict:

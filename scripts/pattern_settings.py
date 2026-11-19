@@ -13,7 +13,6 @@ or an empty list. Standard library only.
 
 from __future__ import annotations
 
-import math
 import re
 from collections.abc import Mapping
 
@@ -47,6 +46,14 @@ GPU_PER_WORKERS = ("server.gpuPerReplica ({share}) must be 1 or equal engineKwar
                    "pipeline_parallel_size ({workers}): each of a replica's workers needs a whole GPU")
 ONE_WORKER_SHARE = ("server.gpuPerReplica ({share}) must be at most 1 when a replica has one worker "
                     "(engineKwargs.tensor_parallel_size and pipeline_parallel_size 1)")
+#: server.streamBatchingIntervalMs is null, 0, or within these bounds (milliseconds), as in
+#: inference-server/serve_app.py (STREAM_INTERVAL_MIN_MS, STREAM_INTERVAL_MAX_MS) and the chart: the chart writes
+#: the value with Go's JSON encoder, which uses exponent form below 1e-6 and from 1e21 up, and the server's YAML
+#: reader takes such an exponent as text.
+STREAM_INTERVAL_MIN_MS = 0.001
+STREAM_INTERVAL_MAX_MS = 60000
+STREAM_INTERVAL = ("server.streamBatchingIntervalMs must be null, 0, or a number of milliseconds from 0.001 to "
+                   "60000; got {value} ({kind})")
 
 
 def _number(value) -> bool:
@@ -158,9 +165,10 @@ def check_server(values: Mapping) -> list[str]:
                    f"{_show(port)} ({_kind(port)})")
         return out
     interval = server.get("streamBatchingIntervalMs")
-    if interval is not None and not (_number(interval) and math.isfinite(interval) and interval >= 0):
-        out.append(f"server.streamBatchingIntervalMs must be null or a number of milliseconds of at least 0; got "
-                   f"{_show(interval)} ({_kind(interval)})")
+    if interval is not None and not (
+        _number(interval) and (interval == 0 or STREAM_INTERVAL_MIN_MS <= interval <= STREAM_INTERVAL_MAX_MS)
+    ):
+        out.append(STREAM_INTERVAL.format(value=_show(interval), kind=_kind(interval)))
         return out
     cache = (values.get("compileCache") or {}).get("mode")
     if not (isinstance(cache, str) and cache in COMPILE_CACHE_MODES):
