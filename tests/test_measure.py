@@ -95,6 +95,20 @@ def test_decode_leaves_out_the_first_writes_tokens_by_running_count():
     assert result.decode_tokens_per_s == pytest.approx((N - 5) / 0.200)
 
 
+def test_one_token_per_write_leaves_out_only_the_first_token():
+    # The server's default (streamBatchingIntervalMs 0): each token is its own network write, 5 ms apart.
+    def counted(text: str, so_far: int) -> dict:
+        return {**_text(text), "usage": {"prompt_tokens": 300, "completion_tokens": so_far,
+                                         "total_tokens": 300 + so_far}}
+
+    writes = [(0.015 + 0.005 * (k - 1), _event(counted(f" w{k}", k))) for k in range(1, N + 1)]
+    writes[-1] = (writes[-1][0], writes[-1][1] + _event(_usage(N)) + _event("[DONE]"))
+    result = _read(writes)
+    assert result.ttft_s == pytest.approx(0.015)
+    assert result.first_write_text_events == 1 and result.first_write_token_count == 1
+    assert result.decode_tokens_per_s == pytest.approx((N - 1) / (0.005 * (N - 1)))
+
+
 def test_a_final_usage_event_in_the_first_write_is_not_the_first_writes_share():
     # The whole answer in one write: the usage-only total in that write must not be taken as the first write's count.
     one = _read([(0.05, _event(_text(" a")) + _event(_usage(N)) + _event("[DONE]"))])

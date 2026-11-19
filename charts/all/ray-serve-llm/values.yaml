@@ -72,6 +72,15 @@ server:
   # other pods can read them at the pod's IP in every mode; the container port
   # and the Service port, both named "metrics", are rendered only in keda mode.
   metricsPort: 8080
+  # How Ray Serve LLM sends a streamed answer. 0: each token as soon as vLLM
+  # generates it. A number of milliseconds from 0.001 to 60000: what has
+  # arrived, in one write each time that long has passed, so each token, the
+  # first one included, can wait up to that long (Ray Serve LLM's own default
+  # is 50). null: Ray Serve LLM's own default, 50 ms (the chart does not set
+  # its RAYLLM_MODEL_RESPONSE_BATCH_TIMEOUT_MS variable). Fewer, larger writes
+  # may cost less CPU with many streams at once; that has not been measured
+  # here.
+  streamBatchingIntervalMs: 0
   objectStoreMemoryGb: 2
   httpHost: 0.0.0.0
   httpPort: 8000

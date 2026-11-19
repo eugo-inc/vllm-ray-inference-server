@@ -65,6 +65,7 @@ def test_defaults_change_nothing():
     assert "minReplicas" not in server and "maxReplicas" not in server
     assert server["gpuPerReplica"] == 1 and server["gpuCount"] == 1
     assert server["metricsPort"] == 8080
+    assert server["streamBatchingIntervalMs"] == 0
     assert SERVER_VALUES["compileCache"]["mode"] == "none"
     assert SERVER_VALUES["modelStorage"]["accessMode"] == "ReadWriteOnce"
     assert set(SERVER_VALUES["scaleOut"]) >= {"minPods", "maxPods", "waitingRequestsPerPod", "pollingIntervalSeconds",
@@ -82,6 +83,10 @@ def test_values_check_names_every_mode():
 
 
 # ---- the rules ------------------------------------------------------------------------------
+
+
+STREAM_INTERVAL = ("server.streamBatchingIntervalMs must be null, 0, or a number of milliseconds from 0.001 to "
+                   "60000")
 
 
 @pytest.mark.parametrize("over, message", [
@@ -108,6 +113,18 @@ def test_values_check_names_every_mode():
     ({"server": {"gpuPerReplica": 0}}, "server.gpuPerReplica must be a number above 0"),
     ({"server": {"gpuPerReplica": "0.5"}}, "server.gpuPerReplica must be a number above 0; got 0.5 (string)"),
     ({"server": {"metricsPort": 8000}}, "server.metricsPort must be a port number"),
+    ({"server": {"streamBatchingIntervalMs": -1}}, STREAM_INTERVAL + "; got -1 (float64)"),
+    ({"server": {"streamBatchingIntervalMs": -0.5}}, STREAM_INTERVAL + "; got -0.5 (float64)"),
+    ({"server": {"streamBatchingIntervalMs": "50"}}, STREAM_INTERVAL + "; got 50 (string)"),
+    ({"server": {"streamBatchingIntervalMs": True}}, STREAM_INTERVAL + "; got true (bool)"),
+    ({"server": {"streamBatchingIntervalMs": float("nan")}}, STREAM_INTERVAL + "; got nan (float64)"),
+    ({"server": {"streamBatchingIntervalMs": float("inf")}}, STREAM_INTERVAL + "; got inf (float64)"),
+    # Outside 0.001 to 60000: the chart's toJson writes 1e-7 and 1e+21 in exponent form, read back as text.
+    ({"server": {"streamBatchingIntervalMs": 1e-7}}, STREAM_INTERVAL + "; got 1e-07 (float64)"),
+    ({"server": {"streamBatchingIntervalMs": 0.0005}}, STREAM_INTERVAL + "; got 0.0005 (float64)"),
+    ({"server": {"streamBatchingIntervalMs": 60000.5}}, STREAM_INTERVAL + "; got 60000.5 (float64)"),
+    ({"server": {"streamBatchingIntervalMs": 1e21}}, STREAM_INTERVAL + "; got 1e+21 (float64)"),
+    ({"server": {"streamBatchingIntervalMs": 10**400}}, STREAM_INTERVAL + "; got "),
     ({"compileCache": {"mode": "disk"}}, "compileCache.mode must be none, node or shared"),
     ({"modelStorage": {"accessMode": "ReadOnlyMany"}}, "modelStorage.accessMode must be ReadWriteOnce or ReadWriteMany"),
     ({"global": {"scaleOut": {"mode": "keda"}}, "scaleOut": {"maxPods": 0}}, "scaleOut.maxPods must be a whole number"),
@@ -171,33 +188,104 @@ def test_the_shared_gpu_reserve_grows_with_the_replica_count(replicas, share, me
     {"global": {"scaleOut": {"mode": "keda"}}, "modelStorage": {"accessMode": "ReadWriteMany"}},
     {"compileCache": {"mode": "shared"}},
     {"global": {"compare": {"mode": "scaleout"}}},
+    {"server": {"streamBatchingIntervalMs": 0.0}},
+    {"server": {"streamBatchingIntervalMs": 12.5}},
+    {"server": {"streamBatchingIntervalMs": 50}},
+    {"server": {"streamBatchingIntervalMs": 0.001}},
+    {"server": {"streamBatchingIntervalMs": 60000}},
+    {"server": {"streamBatchingIntervalMs": None}},
 ])
 def test_values_check_accepts(over):
     assert pattern_settings.check(chart_values(**over)) == []
 
 
-def test_values_check_runs_in_validate_values(tmp_path):
-    """validate-values.sh refuses an unknown scale-out mode in values-global.yaml (needs its pinned schemas from the
-    network)."""
+@pytest.mark.parametrize("value, shown", [
+    # Helm's %v for each, from a render with it as server.streamBatchingIntervalMs or server.metricsPort.
+    (1e6, "1e+06"), (1000000, "1e+06"), (1234567, "1.234567e+06"), (-1e6, "-1e+06"),
+    (123456789.5, "1.234567895e+08"), (1e21, "1e+21"), (999999.5, "999999.5"), (70000, "70000"),
+    (60000.5, "60000.5"), (12.5, "12.5"), (0.0001, "0.0001"), (0.00001, "1e-05"), (1e-7, "1e-07"),
+])
+def test_values_check_shows_numbers_as_helm_does(value, shown):
+    assert pattern_settings._show(value) == shown
+
+
+HELM_LOADER = pattern_settings.helm_loader(yaml)
+
+
+@pytest.mark.parametrize("text, value", [
+    # Helm reads each of these as a number (a render with it as server.streamBatchingIntervalMs); PyYAML alone as text.
+    ("5e1", 50.0), ("1e-3", 0.001), ("1.0e3", 1000.0), ("1e+3", 1000.0), (".5e2", 50.0), ("1_0e1", 100.0),
+    ("-1e6", -1e6), ("1e21", 1e21), ("1e-7", 1e-7), ("1e-999", 0.0), ("1.5_e1", 15.0),
+    ("-.5e+1", -5.0), (".5_5e1", 5.5),
+    # Text in Helm too: beyond float64's range, or an underscore where a digit must be.
+    ("1e999", "1e999"), ("-1e999", "-1e999"), ("1.0e+400", "1.0e+400"), ("._e1", "._e1"), ("._5e1", "._5e1"),
+    (".5_e1", ".5_e1"), (".5__5e1", ".5__5e1"), (".inf", float("inf")),
+    # Read as before.
+    ("'5e1'", "5e1"), ("1e", "1e"), ("e5", "e5"), ("1e5x", "1e5x"), ("1.2.3", "1.2.3"),
+    ("\u0665e\u0661", "\u0665e\u0661"), ("1.5e-7", 1.5e-7), ("12.5", 12.5), ("50", 50), ("0x10", 16), ("null", None),
+    ("true", True),
+])
+def test_exponent_numbers_are_read_as_helm_reads_them(text, value):
+    got = yaml.load(f"x: {text}\n", Loader=HELM_LOADER)["x"]
+    assert got == value and type(got) is type(value)
+
+
+def test_the_helm_loader_reads_every_values_file_as_before():
+    """Only a number in exponent form reads differently, and no values file in the repo has one."""
+    files = [REPO / "values-global.yaml", *REPO.glob("variants/*/*.yaml"), *REPO.glob("overrides/*.yaml"),
+             *REPO.glob("charts/all/*/values.yaml")]
+    assert len(files) > 5
+    for path in files:
+        text = path.read_text()
+        assert yaml.load(text, Loader=HELM_LOADER) == yaml.safe_load(text), path
+
+
+def validate_values(tmp_path, rel: str, old: str, new: str) -> subprocess.CompletedProcess:
+    """scripts/validate-values.sh on a copy of the repo with `old` replaced by `new` in `rel` (needs its pinned
+    schemas from the network: skips without them)."""
     copy_root = tmp_path / "repo"
-    for rel in subprocess.run(["git", "ls-files"], cwd=REPO, capture_output=True, text=True,
-                              check=True).stdout.split():
-        if (REPO / rel).is_file():
-            (copy_root / rel).parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy(REPO / rel, copy_root / rel)
-    for rel in ("scripts/pattern_settings.py", "scripts/validate-values.sh", "values-global.yaml",
-                "charts/all/ray-serve-llm/values.yaml"):
-        shutil.copy(REPO / rel, copy_root / rel)
-    text = (copy_root / "values-global.yaml").read_text()
-    assert text.count("  scaleOut:\n    mode: none\n") == 1
-    (copy_root / "values-global.yaml").write_text(text.replace("  scaleOut:\n    mode: none\n",
-                                                               "  scaleOut:\n    mode: hpa\n"))
+    for name in subprocess.run(["git", "ls-files"], cwd=REPO, capture_output=True, text=True,
+                               check=True).stdout.split():
+        if (REPO / name).is_file():
+            (copy_root / name).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy(REPO / name, copy_root / name)
+    for name in ("scripts/pattern_settings.py", "scripts/validate-values.sh", "values-global.yaml",
+                 "charts/all/ray-serve-llm/values.yaml"):
+        shutil.copy(REPO / name, copy_root / name)
+    text = (copy_root / rel).read_text()
+    assert text.count(old) == 1
+    (copy_root / rel).write_text(text.replace(old, new))
     proc = subprocess.run([str(copy_root / "scripts/validate-values.sh")], capture_output=True, text=True,
                           env={**os.environ, "PYTHON": sys.executable}, timeout=300)
     if "sha256" in proc.stderr or "urlopen" in proc.stderr or "URLError" in proc.stderr:
         pytest.skip("validate-values.sh could not download its schemas")
+    return proc
+
+
+def test_values_check_runs_in_validate_values(tmp_path):
+    """validate-values.sh refuses an unknown scale-out mode in values-global.yaml."""
+    proc = validate_values(tmp_path, "values-global.yaml", "  scaleOut:\n    mode: none\n",
+                           "  scaleOut:\n    mode: hpa\n")
     assert proc.returncode == 1
     assert "scale-out settings, AWS: global.scaleOut.mode must be none or keda; got hpa" in proc.stderr
+
+
+@pytest.mark.parametrize("written, refusal", [
+    ("5e1", None),
+    ("1.0e3", None),
+    ("1e-7", STREAM_INTERVAL + "; got 1e-07 (float64)"),
+])
+def test_validate_values_reads_exponent_numbers_as_helm_does(tmp_path, written, refusal):
+    """A number in exponent form in a values file is a number in validate-values.sh, as in the chart: 5e1 passes, and
+    1e-7 is refused as a number, with the chart's message."""
+    proc = validate_values(tmp_path, "charts/all/ray-serve-llm/values.yaml", "  streamBatchingIntervalMs: 0\n",
+                           f"  streamBatchingIntervalMs: {written}\n")
+    if refusal is None:
+        assert proc.returncode == 0, proc.stderr
+        assert "ok   scale-out settings, AWS\n" in proc.stdout
+    else:
+        assert proc.returncode == 1
+        assert f"scale-out settings, AWS: {refusal}" in proc.stderr
 
 
 # ---- the charts refuse the same settings --------------------------------------------------------
@@ -217,6 +305,10 @@ def test_values_check_runs_in_validate_values(tmp_path):
     ("keda-thanos-url", "scaleOut.thanosUrl must be an http:// or https:// address; got thanos-querier:9092"),
     ("keda-cooldown", "scaleOut.cooldownSeconds must be a whole number from 0 to 3600; got 7200"),
     ("replicas-moved", pattern_settings.MOVED),
+    ("stream-interval-string", STREAM_INTERVAL + "; got 50 (string)"),
+    ("stream-interval-negative", STREAM_INTERVAL + "; got -5 (float64)"),
+    ("stream-interval-tiny", STREAM_INTERVAL + "; got 1e-07 (float64)"),
+    ("stream-interval-huge", STREAM_INTERVAL + "; got 1e+21 (float64)"),
     ("compare-mode-unknown",
      "global.compare.mode must be levels or scaleout; got surge"),
 ])

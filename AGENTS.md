@@ -133,8 +133,9 @@ edit them by hand; `patternizer upgrade` rewrites them. You may add targets to `
 1. `entrypoint.sh` replaces the base image's NVIDIA entrypoint. It unsets `HF_TOKEN` unless the value starts
    with `hf_`, then starts `serve_app.py`.
 2. `serve_app.py` reads `/config/llm.yaml` (the path in `RHVP_CONFIG`), then the environment overrides
-   `RHVP_MODEL_ID`, `RHVP_MODEL_SOURCE`, `RHVP_MODEL_REVISION`, `RHVP_GPU_MEMORY_UTILIZATION` and
-   `RHVP_MAX_MODEL_LEN`, and then any vLLM engine flags on its command line: every argument other than its own
+   `RHVP_MODEL_ID`, `RHVP_MODEL_SOURCE`, `RHVP_MODEL_REVISION`, `RHVP_GPU_MEMORY_UTILIZATION`,
+   `RHVP_MAX_MODEL_LEN` and `RHVP_STREAM_BATCHING_INTERVAL_MS` (a number of milliseconds, or `null`), and then any
+   vLLM engine flags on its command line: every argument other than its own
    `--config`, `--print-config` and `--help` (`serve_app.engine_flags`; the chart passes none, the comparison
    passes a `ray-serve-llm` side's `args`). Each names a field of vLLM's `AsyncEngineArgs`, the class Ray Serve LLM
    builds the engine from, and becomes a key of `engine_kwargs`: `--attention-backend FLASHINFER` is
@@ -167,7 +168,16 @@ edit them by hand; `patternizer upgrade` rewrites them. You may add targets to `
 3. It starts Ray with a 2 GiB object store and its Prometheus metrics on port 8080 (`metrics_port`), checks that
    Ray sees enough GPUs for `max_replicas` replicas (exit 2 when it does not and `max_replicas` is above 1), starts
    Serve on `0.0.0.0:8000`, and runs the Ray Serve LLM app `llm`. `serve.run` returns once the app is RUNNING,
-   which means the model is loaded.
+   which means the model is loaded. `stream_batching_interval_ms` goes to `LLMConfig.experimental_configs`, from
+   which Ray Serve LLM reads how long it collects a streamed answer's tokens before each write (0: every token as
+   vLLM yields it); with `null` the key is left out, and Ray Serve LLM's `RAYLLM_MODEL_RESPONSE_BATCH_TIMEOUT_MS`
+   (read when Ray Serve LLM is imported; 50 when unset) decides. The server logs the interval it passes, and a
+   warning when that variable is set to a value other than the key's, which overrides it. It refuses to start when
+   that variable is set but Python's `float()` does not read it as a number (empty, or text such as `50ms`), since
+   Ray Serve LLM then fails to import. Checked on CPU only, in
+   images with Ray 2.60.0 and a Ray 2.61 development build: the rendered `llm.yaml` gave Ray Serve LLM's own
+   `LLMServer` an interval of 0 by default (also with the variable at 50), 12.5 when set to 12.5, and with `null`
+   the variable's value (50 when unset); not with a running engine, and not with many streams at once.
 4. It then writes the ready file `/tmp/r/rhvp-ready` and waits for SIGTERM. Until then it checks the app every 10
    seconds (every second while `max_replicas` is above `min_replicas`): it removes the ready file when the app stops
    being RUNNING, and logs one `rhvp-scale` line for each replica count that changed. Adding or removing a replica
@@ -195,6 +205,8 @@ http_port: 8000
 # target_ongoing_requests: null  # server.autoscaling.targetOngoingRequests; required when max_replicas > 1
 # gpu_per_replica: null          # server.gpuPerReplica; null: one GPU per tensor- and pipeline-parallel worker
 # metrics_port: 8080             # server.metricsPort
+# stream_batching_interval_ms: 0 # server.streamBatchingIntervalMs; 0: each streamed token as vLLM generates it,
+#                                # 0.001 to 60000: milliseconds per write, null: Ray Serve LLM's own setting
 ```
 
 `serve_app.py` refuses a config it cannot run, with a message that names the key: among others a `max_replicas`
@@ -203,8 +215,13 @@ worker count of a tensor-parallel replica (or above 1 for a replica with one wor
 GPU, a `gpu_memory_utilization` above `gpu_per_replica` minus 0.025 (`SHARED_GPU_RESERVE`, the same 0.025 in the
 chart, `scripts/pattern_settings.py` and the comparison's `plan.SHARED_GPU_RESERVE`; tested together in
 `tests/test_scaleout_contract.py`). The reserve is per replica, so the memory left free grows with the replicas on a
-GPU, for each one's CUDA context; 0.025 of the GPU is an estimate of that context, not a measurement. The chart and
-`scripts/pattern_settings.py` refuse the same settings before a sync.
+GPU, for each one's CUDA context; 0.025 of the GPU is an estimate of that context, not a measurement. It also refuses a
+`stream_batching_interval_ms` that is not `null`, 0, or a number of milliseconds from 0.001 to 60000 (text such as
+`"50"`, a boolean, a negative number and `1e-7` among them). The bounds keep the chart's value a plain number: Helm
+writes a number below 0.000001 or from 10^21 up in exponent form, and PyYAML reads such a number as text when it has
+no decimal point (`1e-7`, `1e+21`). The chart and `scripts/pattern_settings.py` refuse the same settings before a
+sync; `scripts/validate-values.sh` reads a number in exponent form such as `5e1` in the values files as a number, as
+Helm does (`pattern_settings.helm_loader`).
 
 Server container environment:
 
@@ -260,6 +277,13 @@ and uses a serving certificate; the Route uses `reencrypt` termination.
   GuideLLM as its own child process, reads GPU power from the Thanos Querier, deletes the pod and saves
   `results.json`. A side's `args` follow its preset's own: `vllm serve` flags for `vllm-openai`, and vLLM engine
   arguments in the server's own syntax for `ray-serve-llm` (`serve_app.engine_flags`, "How the server starts").
+  The `ray-serve-llm` preset also starts a side with `RAYLLM_MODEL_RESPONSE_BATCH_TIMEOUT_MS=0` and
+  `RHVP_STREAM_BATCHING_INTERVAL_MS=null` (`plan.side_spec`), so the side sends each streamed token as it is
+  generated, as the chart's server does by default. A side mounts the live server's ConfigMap `ray-serve-llm-config`,
+  not `plan.llm_yaml` (the docker backend's file, with the key `null`), so without the second variable it would take
+  the live server's interval; the variable makes it `null` and leaves Ray Serve LLM's variable to decide. A side on
+  an older image, whose `serve_app.py` knows neither the key nor the second variable, ignores the key with a warning,
+  with the same result. A side's own `env` replaces either variable's value.
   GuideLLM starts only after the side has listed the model on `GET /v1/models` and answered a streamed request
   (`probe`), and its backend carries `validate_backend=false` (`guidellm._backend`, both modes): GuideLLM v0.8.1's
   own check is `GET <target>/health` by default, and Ray Serve LLM's OpenAI app has no `/health` route, so with the

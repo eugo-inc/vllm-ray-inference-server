@@ -13,8 +13,10 @@ or an empty list. Standard library only.
 
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Mapping
+from decimal import Decimal
 
 #: global.scaleOut.mode values; none is the default.
 SCALE_OUT_MODES = ("none", "keda")
@@ -46,6 +48,52 @@ GPU_PER_WORKERS = ("server.gpuPerReplica ({share}) must be 1 or equal engineKwar
                    "pipeline_parallel_size ({workers}): each of a replica's workers needs a whole GPU")
 ONE_WORKER_SHARE = ("server.gpuPerReplica ({share}) must be at most 1 when a replica has one worker "
                     "(engineKwargs.tensor_parallel_size and pipeline_parallel_size 1)")
+#: server.streamBatchingIntervalMs is null, 0, or within these bounds (milliseconds), as in
+#: inference-server/serve_app.py (STREAM_INTERVAL_MIN_MS, STREAM_INTERVAL_MAX_MS) and the chart: the chart writes
+#: the value with Go's JSON encoder, which uses exponent form below 1e-6 and from 1e21 up, and the server's YAML
+#: reader takes such a number as text when it has no decimal point (1e-7, 1e+21).
+STREAM_INTERVAL_MIN_MS = 0.001
+STREAM_INTERVAL_MAX_MS = 60000
+STREAM_INTERVAL = ("server.streamBatchingIntervalMs must be null, 0, or a number of milliseconds from 0.001 to "
+                   "60000; got {value} ({kind})")
+#: A plain scalar in exponent form that PyYAML's YAML 1.1 rules leave as text and Helm's YAML reader takes as a number
+#: when it fits a float64: one without a decimal point (5e1, 1e-3), without a sign after the e (1.0e3), or a signed one
+#: that starts with a dot (-.5e+1).
+HELM_EXPONENT = re.compile(r"^[-+]?([0-9][0-9_]*(\.[0-9_]*)?|\.[0-9_]+)[eE][-+]?[0-9]+$")
+_HELM_EXPONENT_TAG = "tag:rhvp,helm-exponent"
+
+
+def helm_loader(yaml_module):
+    """A PyYAML loader class for values files: yaml.SafeLoader, plus a number in exponent form that matches
+    HELM_EXPONENT read as a float (5e1 is 50.0), as Helm reads it. A number beyond float64's range, in that form or in
+    PyYAML's own (1e999, 1.0e+400), stays text, as in Helm, and so does one that starts with a dot and has an underscore
+    that is not between two digits (.5_e1). Only those forms change: PyYAML and Helm still read some other scalars
+    differently (Helm reads 0o17 as 15 and 1:30 as text, PyYAML reads 0o17 as text and 1:30 as 90).
+    scripts/validate-values.sh reads the values files with it. Takes the yaml module as an argument, so this file stays
+    standard library only."""
+
+    class HelmLoader(yaml_module.SafeLoader):
+        pass
+
+    def exponent(loader, node):
+        text = loader.construct_scalar(node)
+        if text.startswith(".") and re.search(r"(?<![0-9])_|_(?![0-9])", text):
+            return text  # Helm reads a number that starts with a dot as written: "_" only between two digits
+        try:
+            number = float(text.replace("_", ""))
+        except ValueError:  # an underscore where a digit must be (._e1): text, as in Helm
+            return text
+        return number if math.isfinite(number) else text
+
+    def finite_float(loader, node):  # PyYAML's own float form: one beyond float64's range (1.0e+400) is text in Helm
+        number = loader.construct_yaml_float(node)
+        text = loader.construct_scalar(node)
+        return number if math.isfinite(number) or text.lower().lstrip("+-") in (".inf", ".nan") else text
+
+    HelmLoader.add_constructor("tag:yaml.org,2002:float", finite_float)
+    HelmLoader.add_implicit_resolver(_HELM_EXPONENT_TAG, HELM_EXPONENT, list("-+0123456789."))
+    HelmLoader.add_constructor(_HELM_EXPONENT_TAG, exponent)
+    return HelmLoader
 
 
 def _number(value) -> bool:
@@ -74,14 +122,31 @@ def _kind(value) -> str:
 
 
 def _show(value) -> str:
-    """The value the way Helm's %v prints it."""
+    """The value the way Helm's %v prints it. Helm reads every number in a values file as a float64, and %v writes a
+    finite one with the fewest digits that read back the same, in exponent form below 1e-4 and from 1e6 up (1e+06,
+    1.234567e+06)."""
     if value is None:
         return "<nil>"
     if isinstance(value, bool):
         return "true" if value else "false"
-    if isinstance(value, float) and value.is_integer():
-        return str(int(value))
+    if _number(value):
+        try:
+            number = float(value)
+        except OverflowError:  # a whole number beyond float64
+            return str(value)
+        if math.isfinite(number):
+            return _show_float(number)
     return str(value)
+
+
+def _show_float(number: float) -> str:
+    digits = Decimal(repr(number)).normalize()
+    if number == 0 or -4 <= digits.adjusted() < 6:
+        return format(digits, "f")
+    sign, figures, _ = digits.as_tuple()
+    mantissa = str(figures[0]) + ("." + "".join(map(str, figures[1:])) if len(figures) > 1 else "")
+    exponent = digits.adjusted()
+    return f"{'-' if sign else ''}{mantissa}e{'+' if exponent >= 0 else '-'}{abs(exponent):02d}"
 
 
 def scale_out_mode(values: Mapping) -> object:
@@ -104,8 +169,8 @@ def check_global(values: Mapping) -> list[str]:
 
 def check_server(values: Mapping) -> list[str]:
     """The server chart's own settings: server.autoscaling, server.gpuPerReplica (and, when replicas share a GPU,
-    server.engineKwargs.gpu_memory_utilization), server.metricsPort, compileCache, modelStorage.accessMode and, in
-    keda mode, scaleOut."""
+    server.engineKwargs.gpu_memory_utilization), server.metricsPort, server.streamBatchingIntervalMs, compileCache,
+    modelStorage.accessMode and, in keda mode, scaleOut."""
     out = []
     server = values.get("server") or {}
     if "minReplicas" in server or "maxReplicas" in server:
@@ -155,6 +220,12 @@ def check_server(values: Mapping) -> list[str]:
     if not (_whole(port) and 1 <= port <= 65535 and port != server.get("httpPort")):
         out.append(f"server.metricsPort must be a port number (1 to 65535) other than server.httpPort; got "
                    f"{_show(port)} ({_kind(port)})")
+        return out
+    interval = server.get("streamBatchingIntervalMs")
+    if interval is not None and not (
+        _number(interval) and (interval == 0 or STREAM_INTERVAL_MIN_MS <= interval <= STREAM_INTERVAL_MAX_MS)
+    ):
+        out.append(STREAM_INTERVAL.format(value=_show(interval), kind=_kind(interval)))
         return out
     cache = (values.get("compileCache") or {}).get("mode")
     if not (isinstance(cache, str) and cache in COMPILE_CACHE_MODES):

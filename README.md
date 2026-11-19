@@ -331,6 +331,14 @@ curl -s http://localhost:8000/v1/chat/completions \
 The `model` field is `global.model.id`. Any OpenAI-compatible client works with `base_url` set to
 `http://localhost:8000/v1`.
 
+**Streamed answers.** With `"stream": true`, the server sends each token as soon as vLLM generates it:
+`server.streamBatchingIntervalMs: 0` in `charts/all/ray-serve-llm/values.yaml`. Before this setting existed, the server
+used Ray Serve LLM's own default, which sends what has arrived every 50 ms, so each token, the first one included, can
+wait up to 50 ms. To send tokens that way again, set a number of milliseconds from 0.001 to 60000 (`50` for that
+default), or `null` for Ray Serve LLM's own default, 50 ms (the chart does not set its
+`RAYLLM_MODEL_RESPONSE_BATCH_TIMEOUT_MS` variable). Fewer, larger writes may cost less CPU when many streams run at
+once; that has not been measured here.
+
 **Optional Route.** Set `route.enabled: true` in `charts/all/ray-serve-llm/values.yaml` in your fork and push. The
 Route raises the router timeout to 10 minutes. It has no authentication: anyone who can reach the cluster's router
 can use the model and the GPU.
@@ -687,9 +695,17 @@ under the same tag is not a new run: change the digest, or `runName`.
 
 Time to first token and inter-token latency are timed where GuideLLM receives the streamed text. A serving layer
 that sends several generated tokens in one streamed write moves the first token later and shortens the measured
-gaps between tokens, compared with a server that sends each token as it is generated. Between a `ray-serve-llm` side
-and a `vllm-openai` side these two figures can differ for that reason alone; the comparison does not correct for
-it. Output tokens per second, over the whole level, is not timed per token.
+gaps between tokens, compared with a server that sends each token as it is generated. The `ray-serve-llm` preset
+starts its sides with `RAYLLM_MODEL_RESPONSE_BATCH_TIMEOUT_MS=0` and `RHVP_STREAM_BATCHING_INTERVAL_MS=null`, so they
+send each token as it is generated, as the pattern's server does by default ("Streamed answers", under "Using the
+API"). The second variable sets the server's `stream_batching_interval_ms` to `null` whatever the side's `llm.yaml`
+holds, and Ray Serve LLM's variable then decides. With docker that file is the run's own, which also leaves the key
+`null`; on OpenShift a side reads the live server's ConfigMap, whose interval the variable replaces. An image of the
+server built before these settings existed ignores the key with a warning and does not know the second variable, and
+Ray Serve LLM's variable sets the same. A side's own `env` can set either variable to another value, such as
+`RAYLLM_MODEL_RESPONSE_BATCH_TIMEOUT_MS=50`, Ray Serve LLM's own default; between such a side and a `vllm-openai`
+side these two figures can differ for that reason alone, and the comparison does not correct for it. Output tokens
+per second, over the whole level, is not timed per token.
 
 ### What has not been checked
 
@@ -1147,9 +1163,9 @@ Speed once serving, through this pattern's server against upstream as shipped (o
 
 | Measure | Upstream | Eugo | What it shows |
 |---|---|---|---|
-| Time to first token on short prompts, in the 8 start-up rounds above (with the server's default 50 ms bursts, so most of each figure is the wait for the first burst) | 60.5 ms | 57.7 ms | Eugo lower in 8 of 8 rounds, by 2.8 ms (5%). A secondary measure under the rule: it describes the run and is not a finding. |
+| Time to first token on short prompts, in the 8 start-up rounds above (with the 50 ms bursts that were this server's default when these rounds ran, so most of each figure is the wait for the first burst) | 60.5 ms | 57.7 ms | Eugo lower in 8 of 8 rounds, by 2.8 ms (5%). A secondary measure under the rule: it describes the run and is not a finding. |
 | Time between tokens, in the same rounds (with the same 50 ms bursts) | 3.10 ms | 3.14 ms | A tie. A secondary measure under the rule: it describes the run and is not a finding. The bursts make this figure lower than the real time per token, which the next row measures. |
-| Time per output token with the server sending each token as it is generated (its 50 ms bursts turned off), in a separate short check (2 starts per side, in both orders) | 5.793 ms | 5.797 ms | A tie: 0.004 ms (0.1%) apart, inside the check's 0.040 ms noise bar (the largest gap between the two starts of any one server setup in the check, under a rule set before it ran). |
+| Time per output token with the server sending each token as it is generated (the 50 ms bursts turned off, as the server now does by default), in a separate short check (2 starts per side, in both orders) | 5.793 ms | 5.797 ms | A tie: 0.004 ms (0.1%) apart, inside the check's 0.040 ms noise bar (the largest gap between the two starts of any one server setup in the check, under a rule set before it ran). |
 
 The time per output token is a tie, and most of it is set by the hardware here. At one stream, each output token
 needs all of the model's weights read from memory once: about 0.99 GB for Qwen2.5-0.5B-Instruct.
