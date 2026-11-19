@@ -218,8 +218,10 @@ chart, `scripts/pattern_settings.py` and the comparison's `plan.SHARED_GPU_RESER
 GPU, for each one's CUDA context; 0.025 of the GPU is an estimate of that context, not a measurement. It also refuses a
 `stream_batching_interval_ms` that is not `null`, 0, or a number of milliseconds from 0.001 to 60000 (text such as
 `"50"`, a boolean, a negative number and `1e-7` among them). The bounds keep the chart's value a plain number: Helm
-writes a number below 0.000001 or from 10^21 up in exponent form (`1e-7`), and PyYAML reads such a number as text.
-The chart and `scripts/pattern_settings.py` refuse the same settings before a sync.
+writes a number below 0.000001 or from 10^21 up in exponent form, and PyYAML reads such a number as text when it has
+no decimal point (`1e-7`, `1e+21`). The chart and `scripts/pattern_settings.py` refuse the same settings before a
+sync; `scripts/validate-values.sh` reads the values files' numbers as Helm does, so a number in exponent form such as
+`5e1` is a number there too (`pattern_settings.helm_loader`).
 
 Server container environment:
 

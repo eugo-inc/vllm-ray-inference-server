@@ -85,7 +85,8 @@
 {{- end -}}
 {{- /* null, 0, or 0.001 to 60000 ms, as in serve_app.py (STREAM_INTERVAL_MIN_MS, STREAM_INTERVAL_MAX_MS) and
        scripts/pattern_settings.py: configmap.yaml writes the value with toJson, which uses exponent form below
-       1e-6 and from 1e21 up (1e-7, 1e+21), and the server's YAML reader takes such a number as text. */ -}}
+       1e-6 and from 1e21 up (1e-7, 1e+21), and the server's YAML reader takes such a number as text when it has
+       no decimal point. */ -}}
 {{- $interval := $srv.streamBatchingIntervalMs -}}
 {{- if not (or (kindIs "invalid" $interval) (and (include "ray-serve-llm.isNumber" $interval) (or (eq (float64 $interval) 0.0) (and (ge (float64 $interval) 0.001) (le (float64 $interval) 60000.0))))) -}}
 {{- fail (printf "server.streamBatchingIntervalMs must be null, 0, or a number of milliseconds from 0.001 to 60000; got %v (%s)" $interval (kindOf $interval)) -}}

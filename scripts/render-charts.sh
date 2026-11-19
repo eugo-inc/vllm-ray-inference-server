@@ -272,7 +272,8 @@ refuse stream-interval-string ray-serve-llm vllm-inference \
 refuse stream-interval-negative ray-serve-llm vllm-inference \
   "server.streamBatchingIntervalMs must be null, 0, or a number of milliseconds from 0.001 to 60000; got -5 (float64)" \
   --set-json server.streamBatchingIntervalMs=-5
-# Values toJson would write in exponent form (1e-7, 1e+21), which the server's YAML reader takes as text.
+# Values toJson would write in exponent form with no decimal point (1e-7, 1e+21), which the server's YAML reader
+# takes as text.
 refuse stream-interval-tiny ray-serve-llm vllm-inference \
   "server.streamBatchingIntervalMs must be null, 0, or a number of milliseconds from 0.001 to 60000; got 1e-07 (float64)" \
   --set-json server.streamBatchingIntervalMs=1e-7

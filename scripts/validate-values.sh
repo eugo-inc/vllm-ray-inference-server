@@ -10,6 +10,9 @@
 #    under overrides/ must be used by at least one case, so a misspelt override name fails
 #    here, and every value a sharedValueFiles entry names must be set (a missing nested one,
 #    such as global.scaleOut.mode, would fail the clustergroup chart's own render).
+#    The values files are read as Helm reads them: a number in exponent form such as
+#    5e1, 1e-3 or 1.0e3 is a number (pattern_settings.helm_loader), where PyYAML alone
+#    reads it as text.
 # 2. Checks values-secret.yaml.template against rhvp.cluster_utils'
 #    values-secrets.v2.schema.json, and against the secrets loader's own rule: a field
 #    with onMissingValue "error" (the default) needs a non-empty value, path or ini_file;
@@ -80,9 +83,17 @@ def fetch(name):
     return json.loads(data)
 
 
-def load(rel):
+HELM_LOADER = pattern_settings.helm_loader(yaml)
+
+
+def load(rel, loader=yaml.SafeLoader):
     with open(os.path.join(REPO, rel)) as fh:
-        return yaml.safe_load(fh) or {}
+        return yaml.load(fh, Loader=loader) or {}
+
+
+def load_values(rel):
+    """A values file, with its numbers as Helm reads them."""
+    return load(rel, HELM_LOADER)
 
 
 def merge(base, over):
@@ -148,7 +159,7 @@ def check(schema, instance, what, fill_defaults=False):
 
 # ---- 1. clustergroup values ---------------------------------------------------------
 cg_schema = fetch("clustergroup")
-glob = load("values-global.yaml")
+glob = load_values("values-global.yaml")
 variant = glob["main"]["variant"]
 variant_file = f"variants/{variant}/values-{variant}.yaml"
 used_overrides = set()
@@ -176,13 +187,13 @@ for platform, extra_global in cases:
                  f"values-{platform}-{variant}.yaml", f"values-4.20-{variant}.yaml",
                  "values-local-cluster.yaml"):
         files.append(f"variants/{variant}/{name}")
-    base = merge(merge(load("values-global.yaml"), load(variant_file)), injected)
+    base = merge(merge(load_values("values-global.yaml"), load_values(variant_file)), injected)
     for entry in (base.get("clusterGroup") or {}).get("sharedValueFiles") or []:
         files.append(render_path(entry, base).lstrip("/"))
     present = [f for f in files if os.path.isfile(os.path.join(REPO, f))]
     merged = {}
     for f in present:
-        merged = merge(merged, load(f))
+        merged = merge(merged, load_values(f))
         if f.startswith("overrides/"):
             used_overrides.add(f)
     merged = merge(merged, injected)
@@ -191,7 +202,7 @@ for platform, extra_global in cases:
     check(cg_schema, merged, f"{label} [{' + '.join(present)}]")
     # ---- 4. scale-out settings, as the server chart sees them for this case
     settings_label = "scale-out settings" + label.removeprefix("clustergroup values")
-    problems = pattern_settings.check(merge(load("charts/all/ray-serve-llm/values.yaml"), merged))
+    problems = pattern_settings.check(merge(load_values("charts/all/ray-serve-llm/values.yaml"), merged))
     failures.extend(f"{settings_label}: {problem}" for problem in problems)
     if not problems:
         print(f"ok   {settings_label}")

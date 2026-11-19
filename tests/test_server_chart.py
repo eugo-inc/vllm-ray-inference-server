@@ -299,6 +299,20 @@ def test_compare_side_override_makes_the_live_configmaps_interval_null(render, t
     assert "experimental_configs" not in serve_app.build_llm_config_kwargs(cfg)
 
 
+def test_compare_side_override_on_the_default_configmap(server, tmp_path):
+    """The live server's ConfigMap from a default install has no stream_batching_interval_ms key, so the server's
+    default 0 would apply; a comparison side's RHVP_STREAM_BATCHING_INTERVAL_MS=null leaves the choice to Ray Serve
+    LLM's own variable there too."""
+    text = llm_yaml(server)
+    assert "stream_batching_interval_ms" not in yaml.safe_load(text)
+    path = tmp_path / "default.yaml"
+    path.write_text(text)
+    cfg = serve_app.load_config(str(path), {"RHVP_STREAM_BATCHING_INTERVAL_MS": "null",
+                                            "RAYLLM_MODEL_RESPONSE_BATCH_TIMEOUT_MS": "50"})
+    assert cfg["stream_batching_interval_ms"] is None
+    assert "experimental_configs" not in serve_app.build_llm_config_kwargs(cfg)
+
+
 @pytest.mark.parametrize("mode, access", [("node", "ReadWriteOnce"), ("shared", "ReadWriteMany")])
 def test_compile_cache_modes_keep_the_caches(server, render, mode, access):
     items = render_of(render, f"cache-{mode}")

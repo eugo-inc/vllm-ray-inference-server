@@ -13,8 +13,10 @@ or an empty list. Standard library only.
 
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Mapping
+from decimal import Decimal
 
 #: global.scaleOut.mode values; none is the default.
 SCALE_OUT_MODES = ("none", "keda")
@@ -49,11 +51,26 @@ ONE_WORKER_SHARE = ("server.gpuPerReplica ({share}) must be at most 1 when a rep
 #: server.streamBatchingIntervalMs is null, 0, or within these bounds (milliseconds), as in
 #: inference-server/serve_app.py (STREAM_INTERVAL_MIN_MS, STREAM_INTERVAL_MAX_MS) and the chart: the chart writes
 #: the value with Go's JSON encoder, which uses exponent form below 1e-6 and from 1e21 up, and the server's YAML
-#: reader takes such an exponent as text.
+#: reader takes such a number as text when it has no decimal point (1e-7, 1e+21).
 STREAM_INTERVAL_MIN_MS = 0.001
 STREAM_INTERVAL_MAX_MS = 60000
 STREAM_INTERVAL = ("server.streamBatchingIntervalMs must be null, 0, or a number of milliseconds from 0.001 to "
                    "60000; got {value} ({kind})")
+#: A plain scalar in exponent form that Helm's YAML reader takes as a number and PyYAML's YAML 1.1 rules leave as text:
+#: one without a decimal point (5e1, 1e-3) or without a sign after the e (1.0e3).
+HELM_EXPONENT = re.compile(r"^[-+]?([0-9][0-9_]*(\.[0-9_]*)?|\.[0-9_]+)[eE][-+]?[0-9]+$")
+
+
+def helm_loader(yaml_module):
+    """A PyYAML loader class that reads a values file's numbers as Helm does: yaml.SafeLoader, plus a number in
+    exponent form (HELM_EXPONENT, 5e1 is 50.0). scripts/validate-values.sh reads the values files with it. Takes the
+    yaml module as an argument, so this file stays standard library only."""
+
+    class HelmLoader(yaml_module.SafeLoader):
+        pass
+
+    HelmLoader.add_implicit_resolver("tag:yaml.org,2002:float", HELM_EXPONENT, list("-+0123456789."))
+    return HelmLoader
 
 
 def _number(value) -> bool:
@@ -82,14 +99,31 @@ def _kind(value) -> str:
 
 
 def _show(value) -> str:
-    """The value the way Helm's %v prints it."""
+    """The value the way Helm's %v prints it. Helm reads every number in a values file as a float64, and %v writes a
+    finite one with the fewest digits that read back the same, in exponent form below 1e-4 and from 1e6 up (1e+06,
+    1.234567e+06)."""
     if value is None:
         return "<nil>"
     if isinstance(value, bool):
         return "true" if value else "false"
-    if isinstance(value, float) and value.is_integer():
-        return str(int(value))
+    if _number(value):
+        try:
+            number = float(value)
+        except OverflowError:  # a whole number beyond float64
+            return str(value)
+        if math.isfinite(number):
+            return _show_float(number)
     return str(value)
+
+
+def _show_float(number: float) -> str:
+    digits = Decimal(repr(number)).normalize()
+    if number == 0 or -4 <= digits.adjusted() < 6:
+        return format(digits, "f")
+    sign, figures, _ = digits.as_tuple()
+    mantissa = str(figures[0]) + ("." + "".join(map(str, figures[1:])) if len(figures) > 1 else "")
+    exponent = digits.adjusted()
+    return f"{'-' if sign else ''}{mantissa}e{'+' if exponent >= 0 else '-'}{abs(exponent):02d}"
 
 
 def scale_out_mode(values: Mapping) -> object:

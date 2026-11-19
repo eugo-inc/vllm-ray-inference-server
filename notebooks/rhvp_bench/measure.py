@@ -12,11 +12,11 @@ How a request is timed (sections 2 to 4):
   streamBatchingIntervalMs above 0 (or null, which leaves Ray Serve LLM's own 50 ms), Ray Serve LLM sends tokens in
   groups, several events in one network write.
 - Decode speed is (N - k) / (time of the last text event - time of the first text event), where k is the number of
-  tokens in the first network write that carried text. When it sends tokens in groups, Ray Serve LLM holds the first
-  write back until its first tick and sends the last one as soon as the stream ends, so the k tokens of the first
-  write were generated before the timed window starts. With the server's default of 0, each token is its own write
-  and k is 1. k comes from the running `completion_tokens` of the events in that write; when the server sends no
-  running counts, k is the number of text events in that write.
+  tokens in the first network write that carried text. When it sends tokens in groups, Ray Serve LLM writes at each
+  tick and sends the last write as soon as the stream ends, so the k tokens of the first write were generated before
+  the timed window starts. With the server's default of 0, each token is its own write and k is 1. k comes from the
+  running `completion_tokens` of the events in that write; when the server sends no running counts, k is the number
+  of text events in that write.
 - A request whose `completion_tokens` is not exactly N is dropped and counted as dropped; a request that fails (an
   HTTP error, an error event in the stream, a stream that ends before `[DONE]`) is counted as failed.
 
