@@ -10,9 +10,10 @@
 #    under overrides/ must be used by at least one case, so a misspelt override name fails
 #    here, and every value a sharedValueFiles entry names must be set (a missing nested one,
 #    such as global.scaleOut.mode, would fail the clustergroup chart's own render).
-#    The values files are read as Helm reads them: a number in exponent form such as
-#    5e1, 1e-3 or 1.0e3 is a number (pattern_settings.helm_loader), where PyYAML alone
-#    reads it as text.
+#    The values files are read with pattern_settings.helm_loader: a number in exponent
+#    form such as 5e1, 1e-3 or 1.0e3 is a number, as Helm reads it, where PyYAML alone
+#    reads it as text. Other scalars that the two readers take differently (0o17, 1:30)
+#    are read as PyYAML reads them.
 # 2. Checks values-secret.yaml.template against rhvp.cluster_utils'
 #    values-secrets.v2.schema.json, and against the secrets loader's own rule: a field
 #    with onMissingValue "error" (the default) needs a non-empty value, path or ini_file;
@@ -92,7 +93,7 @@ def load(rel, loader=yaml.SafeLoader):
 
 
 def load_values(rel):
-    """A values file, with its numbers as Helm reads them."""
+    """A values file, with a number in exponent form read as Helm reads it (pattern_settings.helm_loader)."""
     return load(rel, HELM_LOADER)
 
 
