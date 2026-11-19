@@ -57,29 +57,40 @@ STREAM_INTERVAL_MAX_MS = 60000
 STREAM_INTERVAL = ("server.streamBatchingIntervalMs must be null, 0, or a number of milliseconds from 0.001 to "
                    "60000; got {value} ({kind})")
 #: A plain scalar in exponent form that PyYAML's YAML 1.1 rules leave as text and Helm's YAML reader takes as a number
-#: when it fits a float64: one without a decimal point (5e1, 1e-3) or without a sign after the e (1.0e3).
+#: when it fits a float64: one without a decimal point (5e1, 1e-3), without a sign after the e (1.0e3), or a signed one
+#: that starts with a dot (-.5e+1).
 HELM_EXPONENT = re.compile(r"^[-+]?([0-9][0-9_]*(\.[0-9_]*)?|\.[0-9_]+)[eE][-+]?[0-9]+$")
 _HELM_EXPONENT_TAG = "tag:rhvp,helm-exponent"
 
 
 def helm_loader(yaml_module):
     """A PyYAML loader class for values files: yaml.SafeLoader, plus a number in exponent form that matches
-    HELM_EXPONENT read as a float (5e1 is 50.0), as Helm reads it; one beyond float64's range (1e999) stays text, as in
-    Helm. Only that form changes: PyYAML and Helm still read some other scalars differently (Helm reads 0o17 as 15 and
-    1:30 as text, PyYAML reads 0o17 as text and 1:30 as 90). scripts/validate-values.sh reads the values files with
-    it. Takes the yaml module as an argument, so this file stays standard library only."""
+    HELM_EXPONENT read as a float (5e1 is 50.0), as Helm reads it. A number beyond float64's range, in that form or in
+    PyYAML's own (1e999, 1.0e+400), stays text, as in Helm, and so does one that starts with a dot and has an underscore
+    that is not between two digits (.5_e1). Only those forms change: PyYAML and Helm still read some other scalars
+    differently (Helm reads 0o17 as 15 and 1:30 as text, PyYAML reads 0o17 as text and 1:30 as 90).
+    scripts/validate-values.sh reads the values files with it. Takes the yaml module as an argument, so this file stays
+    standard library only."""
 
     class HelmLoader(yaml_module.SafeLoader):
         pass
 
     def exponent(loader, node):
         text = loader.construct_scalar(node)
+        if text.startswith(".") and re.search(r"(?<![0-9])_|_(?![0-9])", text):
+            return text  # Helm reads a number that starts with a dot as written: "_" only between two digits
         try:
             number = float(text.replace("_", ""))
         except ValueError:  # an underscore where a digit must be (._e1): text, as in Helm
             return text
         return number if math.isfinite(number) else text
 
+    def finite_float(loader, node):  # PyYAML's own float form: one beyond float64's range (1.0e+400) is text in Helm
+        number = loader.construct_yaml_float(node)
+        text = loader.construct_scalar(node)
+        return number if math.isfinite(number) or text.lower().lstrip("+-") in (".inf", ".nan") else text
+
+    HelmLoader.add_constructor("tag:yaml.org,2002:float", finite_float)
     HelmLoader.add_implicit_resolver(_HELM_EXPONENT_TAG, HELM_EXPONENT, list("-+0123456789."))
     HelmLoader.add_constructor(_HELM_EXPONENT_TAG, exponent)
     return HelmLoader

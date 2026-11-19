@@ -216,8 +216,10 @@ HELM_LOADER = pattern_settings.helm_loader(yaml)
     # Helm reads each of these as a number (a render with it as server.streamBatchingIntervalMs); PyYAML alone as text.
     ("5e1", 50.0), ("1e-3", 0.001), ("1.0e3", 1000.0), ("1e+3", 1000.0), (".5e2", 50.0), ("1_0e1", 100.0),
     ("-1e6", -1e6), ("1e21", 1e21), ("1e-7", 1e-7), ("1e-999", 0.0), ("1.5_e1", 15.0),
+    ("-.5e+1", -5.0), (".5_5e1", 5.5),
     # Text in Helm too: beyond float64's range, or an underscore where a digit must be.
-    ("1e999", "1e999"), ("-1e999", "-1e999"), ("._e1", "._e1"),
+    ("1e999", "1e999"), ("-1e999", "-1e999"), ("1.0e+400", "1.0e+400"), ("._e1", "._e1"), ("._5e1", "._5e1"),
+    (".5_e1", ".5_e1"), (".5__5e1", ".5__5e1"), (".inf", float("inf")),
     # Read as before.
     ("'5e1'", "5e1"), ("1e", "1e"), ("e5", "e5"), ("1e5x", "1e5x"), ("1.2.3", "1.2.3"),
     ("\u0665e\u0661", "\u0665e\u0661"), ("1.5e-7", 1.5e-7), ("12.5", 12.5), ("50", 50), ("0x10", 16), ("null", None),
