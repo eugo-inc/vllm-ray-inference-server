@@ -44,8 +44,9 @@ server:
   appName: llm
   engineKwargs:
     max_model_len: 8192
-    gpu_memory_utilization: 0.85
+    gpu_memory_utilization: 0.4
     tensor_parallel_size: 1
+    max_num_seqs: 8
   acceleratorType: null
   # Inside the pod: Ray Serve's own autoscaler adds and removes vLLM replicas
   # in this one server pod. The defaults (1 and 1) keep one replica and no

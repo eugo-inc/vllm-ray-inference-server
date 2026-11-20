@@ -37,7 +37,7 @@ global:
   #              server pods on vLLM's waiting-request count (settings:
   #              scaleOut in charts/all/ray-serve-llm/values.yaml).
   scaleOut:
-    mode: none
+    mode: keda
 
   # Compare two inference-server images on this model, on the same GPU, with
   # the same requests (README, "Compare two images"). Off by default.

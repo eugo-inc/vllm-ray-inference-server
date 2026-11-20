@@ -21,6 +21,6 @@ global:
 # times.
 # Switching this on or off restarts the device plugin on every GPU node.
 timeSlicing:
-  enabled: false
+  enabled: true
   # Shares per GPU, 2 or more.
   replicas: 2
