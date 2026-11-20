@@ -44,7 +44,7 @@ server:
   appName: llm
   engineKwargs:
     max_model_len: 8192
-    gpu_memory_utilization: 0.85
+    gpu_memory_utilization: 0.4
     tensor_parallel_size: 1
   acceleratorType: null
   # Inside the pod: Ray Serve's own autoscaler adds and removes vLLM replicas
@@ -52,11 +52,11 @@ server:
   # autoscaling.
   autoscaling:
     minReplicas: 1
-    maxReplicas: 1
+    maxReplicas: 2
     # Ongoing requests per replica that Ray Serve aims for. Required when
     # maxReplicas is above 1: Ray Serve LLM's own default target is 10^9, so
     # without it the replica count would never grow. null leaves it unset.
-    targetOngoingRequests: null
+    targetOngoingRequests: 4
   # GPUs each replica asks Ray for. maxReplicas * gpuPerReplica must not
   # exceed gpuCount. Above 1 only for a replica with several workers, and then
   # equal to tensor_parallel_size * pipeline_parallel_size (checked). Below 1
@@ -66,7 +66,7 @@ server:
   # outside their share, for their CUDA context: engineKwargs.
   # gpu_memory_utilization at most gpuPerReplica minus 0.025 (checked), such
   # as 0.4 for 0.5.
-  gpuPerReplica: 1
+  gpuPerReplica: 0.5
   # Ray's Prometheus metrics (vLLM's gauges among them, as ray_vllm_*). The
   # server always exports them on this port, on every address of the pod, so
   # other pods can read them at the pod's IP in every mode; the container port
