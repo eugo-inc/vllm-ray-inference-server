@@ -66,7 +66,7 @@ global:
   # enabled to false or start a new run, or a later sync creates it again and
   # the run repeats. Setting enabled back to false deletes nothing.
   compare:
-    enabled: false
+    enabled: true
     # levels   - rounds of the two sides, each launch loaded at
     #            load.concurrencies (described above). The default.
     # scaleout - the scale-out benchmark (the commented example at the end of
@@ -75,7 +75,7 @@ global:
     #            its scale round is built.
     mode: levels
     # Lower-case letters, digits, "-" or "."; at most 40 characters.
-    runName: vllm-two-releases
+    runName: aws-live-20261120
     # Exactly two sides: A, the baseline, first; then B, the candidate. Every
     # ratio in the results is B/A. preset:
     #   vllm-openai    an upstream vLLM OpenAI server image (vllm serve)
@@ -94,12 +94,12 @@ global:
     # engine setting, and the server refuses (exit 2) one it cannot map
     # (README, "Run a comparison").
     sides:
-      - name: vllm-0-32-0
-        image: docker.io/vllm/vllm-openai:v0.32.0@sha256:befccf0e7e4089aa23926bb6f887a85c0d46c2a99e6de5c5ffdf5cb7957c5b34
-        preset: vllm-openai
-      - name: vllm-0-33-0
+      - name: vllm-openai-0-33-0
         image: docker.io/vllm/vllm-openai:v0.33.0@sha256:d825baf9ce4b1b6bfc5ecc7b79880c7e6748c65a72d697ce3d47607aafa84c6e
         preset: vllm-openai
+      - name: ray-serve-llm
+        image: image-registry.openshift-image-registry.svc:5000/vllm-inference/ray-serve-llm:latest
+        preset: ray-serve-llm
     rounds:
       # Rounds of A, A~same, B, B~same. A verdict on a primary case needs every
       # one of 8 rounds to lean the same way with the 4 default primary cases
@@ -107,23 +107,23 @@ global:
       # rounds put every entry in every position equally often.
       # 8 rounds: 34 server starts with the warm-up, about 4 to 6 hours.
       # 16 rounds: 66 server starts, about 8 to 12 hours.
-      count: 8
+      count: 2
       # One unmeasured launch per side first: pulls the image, fills the model
       # cache.
       warmup: true
       # Which sides get a twin, the copy that measures how far two launches of
       # one image land apart: both, A, B or none. Without both, every case gets
       # NO VERDICT: A, B and none shorten a run that only checks the setup.
-      twins: both
+      twins: none
     server:
       gpuMemoryUtilization: 0.85
       maxModelLen: 8192
     load:
       # GuideLLM, one level after another in each launch.
-      concurrencies: [1, 8, 32]
+      concurrencies: [1, 8]
       promptTokens: 256
       outputTokens: 128
-      secondsPerLevel: 60
+      secondsPerLevel: 30
     analysis:
       # Declared before the run. Each side's noise floor is how far its median
       # of side / twin lies from 1; the bar is B's floor plus A's. Outside the
