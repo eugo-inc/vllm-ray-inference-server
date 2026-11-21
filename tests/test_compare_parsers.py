@@ -1634,10 +1634,11 @@ def _runner_open_files(monkeypatch):
 
 class FakeCluster:
     """A fake Kubernetes API for the scale round. One GPU node (`labels` over an L4 offered as two time-sliced
-    shares, a label set to None left out; `allocatable` its status.allocatable); a pod is Running on it with an IP as soon as it is created, unless
-    its name is in `unschedulable` (it then stays Pending with the scheduler's message). The live server's Deployment
-    is at 1, the status ConfigMaps are kept, and every call is recorded as (method, path). `read_only`: any call but a
-    GET fails the test at once (AssertionError, which the Kube client does not catch)."""
+    shares, a label set to None left out; `allocatable` its status.allocatable); a pod is Running on it with an IP as
+    soon as it is created, unless its name is in `unschedulable` (it then stays Pending with the scheduler's message).
+    The live server's Deployment is at 1, the status ConfigMaps are kept, and every call is recorded as (method,
+    path). `read_only`: any call but a GET fails the test at once (AssertionError, which the Kube client does not
+    catch)."""
 
     def __init__(self, labels: dict | None = None, unschedulable: tuple = (), extra_nodes: list | None = None,
                  allocatable: dict | None = None, read_only: bool = False):
