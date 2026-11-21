@@ -1086,10 +1086,10 @@ it is below two for each request of the whole surge plus 64 (the router holds tw
 flight). A stop in this mode also takes down
 the router and the second replica, so the Job's grace period is at least 420 seconds in this mode
 (`compare.terminationGracePeriodSeconds` in `charts/all/notebook/values.yaml`, 300 in mode `levels`). The OpenShift
-scale round has run once on a plain Kubernetes cluster without a GPU (kind, with GuideLLM's mock servers and GPU
-feature discovery's labels set by hand), in an earlier version that did not yet check the node's GPU resource or
-sharing strategy or raise the runner's open-file limit; those have run only in the unit tests. It has not run on
-OpenShift or on a GPU.
+scale round has run on a plain Kubernetes cluster without a GPU (kind, with GuideLLM's mock servers and GPU feature
+discovery's labels set by hand: one complete run, and two stopped during the surge), in an earlier version that did
+not yet check the node's GPU resource or sharing strategy or raise the runner's open-file limit; those have run only
+in the unit tests. It has not run on OpenShift or on a GPU.
 
 #### Picking the surge rate
 

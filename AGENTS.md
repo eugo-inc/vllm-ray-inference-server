@@ -582,12 +582,12 @@ Not checked yet:
 - No server pod has been seen exporting `ray_vllm_num_requests_waiting` under that name; KEDA reads an empty answer
   as 0, so a wrong name means the server never scales, without an error.
 - `compileCache.mode` `node` and `shared`, and `fsGroupChangePolicy: OnRootMismatch`, on OpenShift.
-- The current scale-out mode (with twins) on a GPU or on OpenShift, and so its run length; the OpenShift scale round
-  of the comparison, which has run once on kind without a GPU (GuideLLM's mock servers, labels set by hand) in a
-  version before the allocatable and sharing-strategy checks and the runner's open-file raise, which have run only in
-  the unit tests, and not on OpenShift, not with GPU time-slicing, and not against real GPU feature discovery labels
-  (nor has the runner pod's open-file limit on OpenShift been read); the server records of OpenShift sides carry no
-  server environment (`env_source: "none"`).
+- The current scale-out mode (with twins) on a GPU or on OpenShift, and so its run length; the OpenShift scale round of
+  the comparison, which has run on kind without a GPU (GuideLLM's mock servers, labels set by hand; one complete run,
+  two stopped during the surge) in a version before the allocatable and sharing-strategy checks and the runner's
+  open-file raise, which have run only in the unit tests, and not on OpenShift, not with GPU time-slicing, and not
+  against real GPU feature discovery labels (nor has the runner pod's open-file limit on OpenShift been read); the
+  server records of OpenShift sides carry no server environment (`env_source: "none"`).
 - An upscale replica that keeps failing: whether Ray then marks the app UNHEALTHY, which would remove the ready file
   and take the one serving replica out of the Service.
 - The comparison's scale-out mode on MIG devices: that nvidia-smi's GPU query lists the parent GPU's UUID in a
