@@ -358,6 +358,23 @@ def test_scale_line_round_trip():
     assert set(events[0]) == set(rhvp_scale.FIELDS) | {"log_ts"}
 
 
+def test_scale_parser_reads_the_event_inside_a_ray_json_log_record():
+    # The shape of a real line from the server's pod log on OpenShift (Ray's JSON log encoding): the event is quoted
+    # inside "message". Ids and the node address are made up.
+    inner = rhvp_scale.scale_event("llm", "LLMServer:qwen", 1, 2, "target", ts=1795288958.132)
+    record = {"asctime": "2026-11-21 19:22:38,131", "levelname": "INFO", "message": inner,
+              "filename": "serve_app.py", "lineno": 883, "process": 2, "timestamp_ns": 1795288958131943615}
+    line = json.dumps(record)
+    assert '\\"event\\":\\"rhvp-scale\\"' in line and logs.SCALE_MARKER not in line
+    events = logs.scale_events("\n".join([line, f"2026-11-21T19:24:03.050Z {json.dumps(dict(record, message=rhvp_scale.scale_event('llm', 'LLMServer:qwen', 1, 2, 'running', ts=1795289043.05)))}"]))
+    assert [(e["from"], e["to"], e["reason"]) for e in events] == [(1, 2, "target"), (1, 2, "running")]
+    assert events[0]["log_ts"] == pytest.approx(1795288958.131943615)
+    assert events[1]["log_ts"] == pytest.approx(datetime(2026, 11, 21, 19, 24, 3, 50000, tzinfo=timezone.utc).timestamp())
+    assert logs.scale_events(json.dumps(dict(record, message="rhvp-scale is a word here"))) == []
+    assert logs.scale_events(json.dumps(dict(record, message=inner[:-5]))) == []
+    assert logs.scale_events('{"message": 3, "x": "rhvp-scale"}') == []
+
+
 @pytest.mark.parametrize("text", [
     '{"event":"rhvp-scale","ts":1.0,"app":"llm","deployment":"d","from":1,"to":2}',
     '{"event":"rhvp-scale","ts":1.0,"app":"llm","deployment":"d","from":1,"to":2,"reason":"load"}',

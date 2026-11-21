@@ -205,7 +205,10 @@ def scale_events(log: str) -> list[dict]:
     for at, text in lines(log):
         start = text.find(SCALE_MARKER)
         if start < 0:
-            continue
+            text, at = _json_log_message(decoder, text, at)
+            start = text.find(SCALE_MARKER)
+            if start < 0:
+                continue
         try:
             raw, _ = decoder.raw_decode(text, start)
         except ValueError:
@@ -216,6 +219,28 @@ def scale_events(log: str) -> list[dict]:
             record["log_ts"] = at
             out.append(record)
     return out
+
+
+def _json_log_message(decoder: json.JSONDecoder, text: str, at: float | None) -> tuple[str, float | None]:
+    """For a line Ray wrote with its JSON log encoding (as the server's pod logs on OpenShift are), the record's
+    "message" string, in which the rhvp-scale event is quoted, and the line's time (`at`, or else the record's
+    "timestamp_ns"). Any other line comes back as it is."""
+    if SCALE_EVENT not in text:
+        return text, at
+    start = text.find("{")
+    if start < 0:
+        return text, at
+    try:
+        record, _ = decoder.raw_decode(text, start)
+    except ValueError:
+        return text, at
+    message = record.get("message") if isinstance(record, dict) else None
+    if not isinstance(message, str):
+        return text, at
+    stamp = record.get("timestamp_ns")
+    if at is None and isinstance(stamp, int) and not isinstance(stamp, bool):
+        at = stamp / 1e9
+    return message, at
 
 
 def first_scale_up(events: Iterable[dict], since_epoch: float) -> float | None:
