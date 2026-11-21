@@ -60,11 +60,15 @@ class FakeLimits:
         self.limits, self.refuse, self.unreadable, self.calls = (soft, hard), refuse, unreadable, []
 
     def getrlimit(self, which):
+        import resource
+        assert which == resource.RLIMIT_NOFILE
         if self.unreadable:
             raise self.unreadable
         return self.limits
 
     def setrlimit(self, which, limits):
+        import resource
+        assert which == resource.RLIMIT_NOFILE
         self.calls.append(limits)
         if self.refuse:
             raise self.refuse
@@ -286,10 +290,49 @@ def test_spawn_starts_the_router_as_a_child_process(tmp_path):
 
 @needs_aiohttp
 @needs_resource
+def test_a_real_router_raises_its_soft_open_file_limit_to_the_hard_limit(tmp_path):
+    """A real router child started with a soft limit of 64 and a hard limit of 128 logs the raise as its first line,
+    and on Linux the kernel shows the child's own limit at 128, soft and hard."""
+    import resource
+    hard = resource.getrlimit(resource.RLIMIT_NOFILE)[1]
+    if hard != resource.RLIM_INFINITY and hard < 128:
+        pytest.skip(f"this process's hard open-file limit is {hard}, below 128")
+    port = router.free_port()
+    code = ("import resource, sys\n"
+            "resource.setrlimit(resource.RLIMIT_NOFILE, (64, 128))\n"
+            "from rhvp_compare import router\n"
+            "router.main(sys.argv[1:])\n")
+    log_path = tmp_path / "router.log"
+    env = {**os.environ, "PYTHONPATH": str(ROOT / "notebooks")}
+    with open(log_path, "w", encoding="utf-8") as log:
+        child = subprocess.Popen([sys.executable, "-c", code, "--port", str(port), "--backend", "http://127.0.0.1:9"],
+                                 stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, env=env)
+    limits = None
+    try:
+        deadline = time.monotonic() + 30
+        while "router listening" not in log_path.read_text():
+            assert child.poll() is None and time.monotonic() < deadline, log_path.read_text()
+            time.sleep(0.1)
+        proc_limits = Path(f"/proc/{child.pid}/limits")
+        if proc_limits.exists():
+            row = next(line for line in proc_limits.read_text().splitlines() if line.startswith("Max open files"))
+            limits = row.split()[3:5]
+    finally:
+        child.send_signal(signal.SIGTERM)
+        child.wait(timeout=15)
+    assert log_path.read_text().splitlines()[0] == "router: open-file limit 64 (hard limit 128), raised to 128"
+    if sys.platform.startswith("linux"):
+        assert limits == ["128", "128"]
+    assert child.returncode == 0
+
+
+@needs_aiohttp
+@needs_resource
 def test_a_router_out_of_file_handles_logs_one_line_a_second_and_keeps_serving(tmp_path):
     """A real router child held at 32 open files (soft and hard, so it cannot raise them) gets 80 connections at
-    once: asyncio reports each refused accept, about a hundred a second here; the log gets one line a second and a
-    closing count. Once the connections close, the router answers again."""
+    once: asyncio reports each failed accept() call, up to 129 in one pass over the listening socket, and the passes
+    pile up; the log gets one line a second and a closing count. Once the connections close, the router answers
+    again."""
     port = router.free_port()
     code = ("import resource, sys\n"
             "resource.setrlimit(resource.RLIMIT_NOFILE, (32, 32))\n"
