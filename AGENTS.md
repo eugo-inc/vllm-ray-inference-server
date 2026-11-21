@@ -457,7 +457,8 @@ Three parts, each off by default. With every default, the local charts render ex
   The router (`rhvp_compare/router.py`, a child of the runner) holds two connections for each request in flight:
   `scripts/compare-local.sh` starts the runner container with `--ulimit nofile=65536:65536`, soft and hard
   (`RUNNER_OPEN_FILES`, a whole number above 0; set but empty, no flag, and GuideLLM keeps docker's soft limit;
-  anything else exits 2 before docker runs), since at docker's default soft limit of 1024 on the machine measured the
+  anything else exits 2 before docker runs; if docker refuses to start the runner with "error setting rlimit", set it
+  to a lower number, or set it but empty), since at docker's default soft limit of 1024 on the machine measured the
   router stopped taking connections at about 509 in flight; `router.serve` raises its own soft open-file limit to the
   hard limit when it starts and logs the limit before and after, and `router.OutOfFilesLog` logs running out of file
   handles at most once a second, with a count of the lines left out.
