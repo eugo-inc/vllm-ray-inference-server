@@ -16,8 +16,12 @@ import json
 import os
 import random
 import re
+import shutil
 import signal
+import socket
+import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -1217,6 +1221,71 @@ def test_compare_local_passes_on_settings_the_docker_backend_reads():
     assert {"RHVP_COMPARE_REPLICA_GPUS", "RHVP_COMPARE_CPUSET", "RHVP_COMPARE_CACHE_VOLUME"} <= passed
     assert passed <= read
     assert '"${cpuset_flag[@]}"' in script  # the runner container itself stays on the CPU set
+
+
+def _run_compare_local(tmp_path: Path, **settings: str) -> tuple[subprocess.CompletedProcess, list[list[str]], str]:
+    """Runs the real scripts/compare-local.sh with a fake `docker` first on PATH that records each call's arguments and
+    exits 0, and a Unix socket as DOCKER_SOCKET, so nothing reaches a docker daemon. The socket sits in a short
+    folder of its own, since a Unix socket's path may hold at most 107 bytes and tmp_path can be longer. The script
+    gets only PATH, HOME, the socket, the record file and the given settings, so none of the caller's own settings
+    leak in. Returns the finished process, the recorded calls and the socket's path."""
+    stub_dir, log = tmp_path / "bin", tmp_path / "docker-calls.jsonl"
+    stub_dir.mkdir()
+    stub = stub_dir / "docker"
+    stub.write_text(f"#!{sys.executable}\nimport json, os, sys\n"
+                    "with open(os.environ['DOCKER_STUB_LOG'], 'a') as f:\n"
+                    "    f.write(json.dumps(sys.argv[1:]) + '\\n')\n")
+    stub.chmod(0o755)
+    with tempfile.TemporaryDirectory(prefix="rhvp-") as short, socket.socket(socket.AF_UNIX) as listener:
+        sock = os.path.join(short, "d.sock")
+        listener.bind(sock)
+        env = {"PATH": f"{stub_dir}{os.pathsep}{os.environ['PATH']}", "HOME": str(tmp_path),
+               "DOCKER_SOCKET": sock, "DOCKER_STUB_LOG": str(log), **settings}
+        done = subprocess.run(["bash", str(ROOT / "scripts/compare-local.sh"),
+                               str(FIXTURES / "compare-local-mock.json"), str(tmp_path / "results")],
+                              env=env, capture_output=True, text=True, timeout=60)
+    calls = [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
+    return done, calls, sock
+
+
+needs_compare_local = pytest.mark.skipif(shutil.which("bash") is None or not sys.platform.startswith("linux"),
+                                         reason="runs scripts/compare-local.sh, which needs bash and GNU stat")
+
+
+@needs_compare_local
+@pytest.mark.parametrize("value, flag", [
+    (None, ["--ulimit", "nofile=65536:65536"]),  # unset: the default
+    ("4096", ["--ulimit", "nofile=4096:4096"]),
+    ("", []),  # set but empty: no flag, docker's default
+])
+def test_compare_local_gives_the_runner_container_a_high_open_file_limit(tmp_path, value, flag):
+    """The router (scale-out mode) holds two connections per request in flight; at docker's default soft open-file
+    limit of 1024 it stopped accepting at about 509 in flight. RUNNER_OPEN_FILES sets the runner's limit, soft and
+    hard (65536 when unset); set but empty, the runner gets no --ulimit flag. The flag must be on the runner's own
+    docker run, before the image (after it, docker would hand it to the runner's command). The real script runs here,
+    with a fake docker; DOCKER_SOCKET is mounted at the fixed path the runner reads."""
+    done, calls, sock = _run_compare_local(tmp_path, **({} if value is None else {"RUNNER_OPEN_FILES": value}))
+    assert done.returncode == 0, done.stderr
+    runs = [call for call in calls if call[0] == "run" and "rhvp-compare.runner=1" in call]
+    assert len(runs) == 1, calls
+    run = runs[0]
+    image_at = run.index("--entrypoint") + 2
+    at = [i for i, arg in enumerate(run) if arg == "--ulimit"]
+    assert [arg for i in at for arg in run[i:i + 2]] == flag
+    assert all(i < image_at for i in at)
+    assert f"{sock}:/var/run/docker.sock" in run
+
+
+@needs_compare_local
+@pytest.mark.parametrize("value", ["abc", "1024:65536", "0", "065536", "-1", " 4096"])
+def test_compare_local_refuses_an_open_file_limit_that_is_not_a_whole_number(tmp_path, value):
+    """A RUNNER_OPEN_FILES that is not a whole number above 0 stops the script with exit 2 and a line naming the
+    setting, before any docker call (docker itself would fail later with exit 125 and its own usage text)."""
+    done, calls, _ = _run_compare_local(tmp_path, RUNNER_OPEN_FILES=value)
+    assert done.returncode == 2
+    assert "RUNNER_OPEN_FILES" in done.stderr
+    assert calls == []
+
 
 def _main(tmp_path, backend, monkeypatch, **extra) -> tuple[int, Path, Path]:
     """main_run with the fake server; returns (exit code, the results root, the termination message file)."""

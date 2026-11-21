@@ -35,10 +35,20 @@
 # process of the runner, like GuideLLM). Both replicas get GPUS unless REPLICA_GPUS gives each its own; the run is
 # refused when that does not match scaleOut.sharedGpu (true: one GPU for both, false: a GPU of its own for each).
 #
+# The runner container's open-file limit is RUNNER_OPEN_FILES, soft and hard (65536 by default; docker's default soft
+# limit was 1024 on the machine measured, and depends on the docker daemon's settings), for GuideLLM and the router:
+# the router holds two connections for each request in flight, so at 1024 it stopped accepting at about 509 in flight.
+# Set but empty, it leaves docker's default: the router still raises its own soft limit to the hard one, but GuideLLM
+# keeps the soft limit, so at 1024 it can hold at most about 1,000 connections. A value that is not a whole number
+# above 0 stops the script before docker runs (exit 2). If docker refuses to start the runner with "error setting
+# rlimit", set RUNNER_OPEN_FILES to a lower number, or set it but empty.
+#
 # Settings (environment variables):
 #   LOAD_IMAGE      the GuideLLM image the runner runs in (default: the pinned release); set it to the same
 #                   image when the config sets load.image
 #   NETWORK         docker network (default rhvp-compare)
+#   DOCKER_SOCKET   the docker daemon's socket, mounted into the runner at /var/run/docker.sock (default
+#                   /var/run/docker.sock); it must be the daemon the docker command here talks to
 #   MODELS_VOLUME   docker volume for /models (default rhvp-compare-models)
 #   GPUS            "all" (default) or a device id such as 0; give one id on a machine with several GPUs
 #   REPLICA_GPUS    mode scaleout: one device id per replica, comma-separated (for example 0,1, or two MIG
@@ -49,6 +59,8 @@
 #   CACHE_VOLUME    name prefix of the warm compile-cache volumes (default rhvp-compare-cache)
 #   HF_TOKEN        passed on when it starts with hf_ (gated models)
 #   RUNNER_MEMORY   memory limit of the runner container, GuideLLM included (default 8g)
+#   RUNNER_OPEN_FILES  open-file limit of the runner container, soft and hard: a whole number above 0 (default
+#                   65536), or empty for docker's default, which GuideLLM then keeps (see above)
 #   SIDE_MEMORY     memory limit of each side's container, as docker writes it (default none, for example 32g)
 #   SERVER_CONTAINER  a container that normally holds the GPU: stopped for the run, started again after it (one
 #                   that stopped by itself before the run took it is left as it is; results.md says so)
@@ -70,14 +82,21 @@ REPLICA_GPUS="${REPLICA_GPUS:-}"
 CPUSET="${CPUSET:-}"
 CACHE_VOLUME="${CACHE_VOLUME:-rhvp-compare-cache}"
 RUNNER_MEMORY="${RUNNER_MEMORY:-8g}"
+RUNNER_OPEN_FILES="${RUNNER_OPEN_FILES-65536}"  # no colon: set but empty stays empty (docker's default)
 SIDE_MEMORY="${SIDE_MEMORY:-}"
 SERVER_CONTAINER="${SERVER_CONTAINER:-}"
 STOP_TIMEOUT="${STOP_TIMEOUT:-120}"
 RUNNER_NAME="rhvp-compare-runner-$$"
-SOCKET=/var/run/docker.sock
+SOCKET="${DOCKER_SOCKET:-/var/run/docker.sock}"
 
 [ -f "$CONFIG" ] || { echo "no config file at $CONFIG" >&2; exit 2; }
 [ -S "$SOCKET" ] || { echo "no docker socket at $SOCKET" >&2; exit 2; }
+case "$RUNNER_OPEN_FILES" in
+  '') ;;
+  0* | *[!0-9]*)
+    echo "RUNNER_OPEN_FILES must be a whole number above 0, or empty for docker's default; got: $RUNNER_OPEN_FILES" >&2
+    exit 2 ;;
+esac
 
 # The pinned GuideLLM release (GUIDELLM_IMAGE in notebooks/rhvp_compare/plan.py; a test keeps the two equal).
 LOAD_IMAGE="${LOAD_IMAGE:-ghcr.io/vllm-project/guidellm:v0.8.1@sha256:015b22441020e6014b4c06d89882921eb29e9b9a6f2e274b253afef4029aa081}"
@@ -87,9 +106,12 @@ token_env=()
 case "${HF_TOKEN:-}" in hf_*) token_env=(-e HF_TOKEN) ;; esac
 cpuset_flag=()
 [ -z "$CPUSET" ] || cpuset_flag=(--cpuset-cpus "$CPUSET")
+ulimit_flag=()
+[ -z "$RUNNER_OPEN_FILES" ] || ulimit_flag=(--ulimit "nofile=$RUNNER_OPEN_FILES:$RUNNER_OPEN_FILES")
 
 docker run --rm --name "$RUNNER_NAME" --network "$NETWORK" \
   --label rhvp-compare.runner=1 --memory "$RUNNER_MEMORY" --stop-timeout "$STOP_TIMEOUT" --init \
+  "${ulimit_flag[@]}" \
   "${cpuset_flag[@]}" \
   --user "$(id -u):$(id -g)" --group-add "$(stat -c %g "$SOCKET")" \
   -v "$SOCKET:/var/run/docker.sock" \

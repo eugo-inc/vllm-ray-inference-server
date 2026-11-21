@@ -7,7 +7,12 @@ Run with: python -m pytest -q tests/test_compare_router.py
 """
 
 import asyncio
+import errno
 import importlib.util
+import os
+import signal
+import socket
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -42,6 +47,113 @@ def test_picker_sends_to_the_least_busy_and_ties_take_turns():
             for s in stats["backends"]] == [(2, 1, 0, 1, 0, 2), (2, 0, 1, 0, 1, 2)]
     with pytest.raises(LookupError):
         router.Picker().pick()
+
+
+needs_resource = pytest.mark.skipif(importlib.util.find_spec("resource") is None,
+                                    reason="open-file limits need the resource module (Unix)")
+
+
+class FakeLimits:
+    """getrlimit/setrlimit for RLIMIT_NOFILE without touching the test process's own limit."""
+
+    def __init__(self, soft, hard, refuse=None, unreadable=None):
+        self.limits, self.refuse, self.unreadable, self.calls = (soft, hard), refuse, unreadable, []
+
+    def getrlimit(self, which):
+        import resource
+        assert which == resource.RLIMIT_NOFILE
+        if self.unreadable:
+            raise self.unreadable
+        return self.limits
+
+    def setrlimit(self, which, limits):
+        import resource
+        assert which == resource.RLIMIT_NOFILE
+        self.calls.append(limits)
+        if self.refuse:
+            raise self.refuse
+        self.limits = limits
+
+
+@needs_resource
+@pytest.mark.parametrize("soft, hard, refuse, unreadable, calls, line", [
+    (1024, 524288, None, None, [(524288, 524288)],
+     "router: open-file limit 1024 (hard limit 524288), raised to 524288"),
+    (65536, 65536, None, None, [], "router: open-file limit 65536 (hard limit 65536), already at the hard limit"),
+    (1024, 4096, ValueError("not allowed"), None, [(4096, 4096)],
+     "router: open-file limit 1024 (hard limit 4096); could not raise it (not allowed), left as it is"),
+    (1024, 4096, None, OSError("no"), [], "router: could not read the open-file limit (no), left as it is"),
+    (1024, "unlimited", ValueError("current limit exceeds maximum limit"), None, [("unlimited", "unlimited")],
+     "router: open-file limit 1024 (hard limit unlimited); could not raise it (current limit exceeds maximum "
+     "limit), left as it is"),
+])
+def test_the_router_raises_its_open_file_limit_to_the_hard_limit(monkeypatch, soft, hard, refuse, unreadable, calls,
+                                                                  line):
+    import resource
+
+    def unlimited(value):
+        return resource.RLIM_INFINITY if value == "unlimited" else value
+
+    hard = unlimited(hard)
+    fake = FakeLimits(soft, hard, refuse, unreadable)
+    monkeypatch.setattr(resource, "getrlimit", fake.getrlimit)
+    monkeypatch.setattr(resource, "setrlimit", fake.setrlimit)
+    assert router.raise_open_file_limit() == line  # never raises, never above the hard limit
+    assert fake.calls == [tuple(unlimited(v) for v in c) for c in calls]
+
+
+def test_running_out_of_file_handles_is_logged_at_most_once_a_second():
+    now = [100.0]
+    lines, others = [], []
+    log = router.OutOfFilesLog(others.append, write=lines.append, clock=lambda: now[0])
+    emfile = {"message": "socket.accept() out of system resource",
+              "exception": OSError(errno.EMFILE, "Too many open files")}
+    for at in (100.0, 100.1, 100.5, 100.99, 101.0, 101.2, 102.5):
+        now[0] = at
+        log(None, emfile)
+    now[0] = 102.6
+    log(None, {"message": "socket.accept() out of system resource", "exception": OSError(errno.ENFILE, "full")})
+    other = [{"message": "a broken connection", "exception": ConnectionResetError()},
+             {"message": "out of buffers", "exception": OSError(errno.ENOBUFS, "No buffer space available")},
+             {"message": "no exception at all"}]
+    for context in other:
+        log(None, context)
+    assert others == other  # every other error still goes to the loop's default handler, as before
+    assert lines == [
+        "router: socket.accept() out of system resource: [Errno 24] Too many open files",
+        "router: socket.accept() out of system resource: [Errno 24] Too many open files (3 more like it in the last "
+        "1.0 s, not logged)",
+        "router: socket.accept() out of system resource: [Errno 24] Too many open files (1 more like it in the last "
+        "1.5 s, not logged)",
+    ]
+    assert (log.total, log.left_out) == (8, 1)
+    assert log.summary() == "router: ran out of file handles 8 times in all; 1 of them after the last line logged"
+    assert router.OutOfFilesLog(others.append).summary() is None
+
+
+def test_accept_retries_after_the_listening_socket_closed_are_dropped_once_stopping():
+    """asyncio retries a failed accept() a second later (`BaseSelectorEventLoop._start_serving`); a retry that runs
+    after the router has closed its listening socket fails with "Invalid file descriptor: -1". Once `stopping` is
+    set, the handler drops those without a line; before that, and for every other error, the loop's default handler
+    still gets them."""
+    lines, others = [], []
+    log = router.OutOfFilesLog(others.append, write=lines.append, clock=lambda: 0.0)
+    retry = {"message": "Exception in callback BaseSelectorEventLoop._start_serving(<aiohttp.web_protocol...>, "
+                        "<socket.socket fd=-1, ...>, None, <Server sockets=()>, 128, None, None)",
+             "exception": ValueError("Invalid file descriptor: -1")}
+    log(None, retry)
+    assert others == [retry]  # while the router serves, it is not one to drop
+    log.stopping = True
+    log(None, retry)
+    other_value_error = {"message": "Exception in callback something_else()", "exception": ValueError("-1")}
+    no_exception = {"message": retry["message"]}
+    out_of_files = {"message": "socket.accept() out of system resource",
+                    "exception": OSError(errno.EMFILE, "Too many open files")}
+    for context in (other_value_error, no_exception, out_of_files):
+        log(None, context)
+    assert others == [retry, other_value_error, no_exception]
+    assert lines == ["router: socket.accept() out of system resource: [Errno 24] Too many open files"]
+    assert log.total == 1
 
 
 # ---- the server ----
@@ -196,4 +308,170 @@ def test_spawn_starts_the_router_as_a_child_process(tmp_path):
     finally:
         process.stop()
     assert process.process.returncode == 0
-    assert "router listening on 127.0.0.1" in (tmp_path / "router.log").read_text()
+    log = (tmp_path / "router.log").read_text()
+    assert "router listening on 127.0.0.1" in log
+    assert "router: open-file limit " in log.splitlines()[0]  # one line, before the server starts
+
+
+@needs_aiohttp
+@needs_resource
+def test_a_real_router_raises_its_soft_open_file_limit_to_the_hard_limit(tmp_path):
+    """A real router child started with a soft limit of 64 and a hard limit of 128 logs the raise as its first line,
+    and on Linux the kernel shows the child's own limit at 128, soft and hard."""
+    import resource
+    hard = resource.getrlimit(resource.RLIMIT_NOFILE)[1]
+    if hard != resource.RLIM_INFINITY and hard < 128:
+        pytest.skip(f"this process's hard open-file limit is {hard}, below 128")
+    port = router.free_port()
+    code = ("import resource, sys\n"
+            "resource.setrlimit(resource.RLIMIT_NOFILE, (64, 128))\n"
+            "from rhvp_compare import router\n"
+            "router.main(sys.argv[1:])\n")
+    log_path = tmp_path / "router.log"
+    env = {**os.environ, "PYTHONPATH": str(ROOT / "notebooks")}
+    with open(log_path, "w", encoding="utf-8") as log:
+        child = subprocess.Popen([sys.executable, "-c", code, "--port", str(port), "--backend", "http://127.0.0.1:9"],
+                                 stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, env=env)
+    limits = None
+    try:
+        deadline = time.monotonic() + 30
+        while "router listening" not in log_path.read_text():
+            assert child.poll() is None and time.monotonic() < deadline, log_path.read_text()
+            time.sleep(0.1)
+        proc_limits = Path(f"/proc/{child.pid}/limits")
+        if proc_limits.exists():
+            row = next(line for line in proc_limits.read_text().splitlines() if line.startswith("Max open files"))
+            limits = row.split()[3:5]
+    finally:
+        child.send_signal(signal.SIGTERM)
+        child.wait(timeout=15)
+    assert log_path.read_text().splitlines()[0] == "router: open-file limit 64 (hard limit 128), raised to 128"
+    if sys.platform.startswith("linux"):
+        assert limits == ["128", "128"]
+    assert child.returncode == 0
+
+
+@needs_aiohttp
+@needs_resource
+def test_a_router_out_of_file_handles_logs_one_line_a_second_and_keeps_serving(tmp_path):
+    """A real router child held at 32 open files (soft and hard, so it cannot raise them) gets 80 connections at
+    once: asyncio reports each failed accept() call, up to 129 in one pass over the listening socket, and the passes
+    pile up; the log gets one line a second and a closing count. Once the connections close, the router answers
+    again."""
+    port = router.free_port()
+    code = ("import resource, sys\n"
+            "resource.setrlimit(resource.RLIMIT_NOFILE, (32, 32))\n"
+            "from rhvp_compare import router\n"
+            "router.main(sys.argv[1:])\n")
+    log_path = tmp_path / "router.log"
+    env = {**os.environ, "PYTHONPATH": str(ROOT / "notebooks")}
+    with open(log_path, "w", encoding="utf-8") as log:
+        child = subprocess.Popen([sys.executable, "-c", code, "--port", str(port), "--backend", "http://127.0.0.1:9"],
+                                 stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, env=env)
+    clients, flood_started = [], time.monotonic()
+    try:
+        deadline = time.monotonic() + 30
+        while "router listening" not in log_path.read_text():
+            assert child.poll() is None and time.monotonic() < deadline, log_path.read_text()
+            time.sleep(0.1)
+        flood_started = time.monotonic()
+        for _ in range(80):
+            clients.append(socket.create_connection(("127.0.0.1", port), timeout=5))
+        time.sleep(3.5)
+        for client in clients:
+            client.close()
+        clients.clear()
+        deadline = time.monotonic() + 15
+        while True:  # the handles come back: the router answers again
+            try:
+                with socket.create_connection(("127.0.0.1", port), timeout=2) as probe:
+                    probe.sendall(b"GET /health HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+                    if probe.recv(64).startswith(b"HTTP/1.1 200"):
+                        break
+            except OSError:
+                pass
+            assert time.monotonic() < deadline, log_path.read_text()[-2000:]
+            time.sleep(0.2)
+    finally:
+        for client in clients:
+            client.close()
+        flood_s = time.monotonic() - flood_started
+        child.send_signal(signal.SIGTERM)
+        child.wait(timeout=15)
+    text = log_path.read_text()
+    logged = [line for line in text.splitlines() if "out of system resource" in line]
+    assert text.splitlines()[0] == "router: open-file limit 32 (hard limit 32), already at the hard limit"
+    assert 2 <= len(logged) <= flood_s + 2, text[-3000:]  # at most one line a second
+    assert all(line.startswith("router: socket.accept() out of system resource: [Errno 24]") for line in logged)
+    assert "Traceback" not in text
+    assert any("more like it in the last" in line for line in logged)
+    closing = [line for line in text.splitlines() if line.startswith("router: ran out of file handles ")]
+    assert len(closing) == 1 and int(closing[0].split()[6]) > 10 * len(logged)  # "... file handles N times in all"
+    assert child.returncode == 0
+
+
+@needs_aiohttp
+@needs_resource
+def test_a_router_stopped_while_out_of_file_handles_logs_no_traceback(tmp_path):
+    """A real router child held at 32 open files gets 80 connections at once and is stopped (SIGTERM) while they are
+    still open, with one request still waiting on a replica that holds it 2.5 s more. asyncio's accept() retries are
+    then still waiting, and they run while the router closes, after its listening socket is gone; each used to log a
+    traceback ("Invalid file descriptor: -1"). The log now has none, and the router exits 0."""
+    import threading
+
+    port = router.free_port()
+    replica_socket = socket.create_server(("127.0.0.1", 0))
+    held, release = [], threading.Event()
+
+    def hold_one():  # accepts the router's one request, sends nothing, closes it once released
+        connection, _ = replica_socket.accept()
+        held.append(connection)
+        release.wait(30)
+        connection.close()
+
+    holder = threading.Thread(target=hold_one, daemon=True)
+    holder.start()
+    code = ("import resource, sys\n"
+            "resource.setrlimit(resource.RLIMIT_NOFILE, (32, 32))\n"
+            "from rhvp_compare import router\n"
+            "router.main(sys.argv[1:])\n")
+    log_path = tmp_path / "router.log"
+    env = {**os.environ, "PYTHONPATH": str(ROOT / "notebooks")}
+    backend = f"http://127.0.0.1:{replica_socket.getsockname()[1]}"
+    with open(log_path, "w", encoding="utf-8") as log:
+        child = subprocess.Popen([sys.executable, "-c", code, "--port", str(port), "--backend", backend],
+                                 stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, env=env)
+    clients = []
+    try:
+        deadline = time.monotonic() + 30
+        while "router listening" not in log_path.read_text():
+            assert child.poll() is None and time.monotonic() < deadline, log_path.read_text()
+            time.sleep(0.1)
+        waiting = socket.create_connection(("127.0.0.1", port), timeout=5)
+        clients.append(waiting)
+        waiting.sendall(b"POST /v1/completions HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\n"
+                        b"Content-Length: 2\r\n\r\n{}")
+        deadline = time.monotonic() + 10
+        while not held:  # the request has reached the replica
+            assert time.monotonic() < deadline, log_path.read_text()
+            time.sleep(0.05)
+        for _ in range(80):
+            clients.append(socket.create_connection(("127.0.0.1", port), timeout=5))
+        time.sleep(1.5)
+        assert "out of system resource" in log_path.read_text()  # out of handles when the stop comes
+        child.send_signal(signal.SIGTERM)
+        time.sleep(2.5)  # retries that were waiting when the stop came run in this time
+        release.set()
+        child.wait(timeout=30)
+    finally:
+        release.set()
+        for client in clients:
+            client.close()
+        if child.poll() is None:
+            child.kill()
+            child.wait()
+        replica_socket.close()
+    text = log_path.read_text()
+    assert "router stopping: " in text
+    assert "Traceback" not in text and "Invalid file descriptor" not in text, text[-3000:]
+    assert child.returncode == 0
