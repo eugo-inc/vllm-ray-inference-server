@@ -445,22 +445,31 @@ Three parts, each off by default. With every default, the local charts render ex
   GPU unseen, so the docs say to turn it off before a comparison in mode `levels`. The comparison's mode `scaleout`
   with `sharedGpu: true` needs it on with two shares; there a GPU pod from another namespace that holds the second
   share leaves the second replica with no node, and the launch fails (`kube.REPLICA_PENDING_S`) instead of being timed
-  on a shared GPU, except for a pod that comes and goes while only the first replica runs. Server pods on more than one
+  on a shared GPU, except for a pod that holds the second share before the forced step and is gone by then (the first
+  replica's timed start and the surge before the step then share the GPU unseen). Server pods on more than one
   node need `modelStorage.accessMode: ReadWriteMany` and `compileCache.mode: shared`; a PVC's access mode cannot change
   after it is created.
 - **The comparison's mode `scaleout`** (`global.compare.mode`): both backends run it. `scaleOut.sharedGpu` sets the
   memory default and the 0.475 refusal, and each backend checks where the replicas will run against it before
   anything changes (`check_plan`, `PLAN_INVALID`). On OpenShift (`KubeBackend.check_plan`) the runner lists the nodes
-  of the sides' CPU type and needs a GPU node whose labels fit (`kube.share_fits`: `nvidia.com/gpu.count` 1 and
-  `nvidia.com/gpu.replicas` 2 for `true`; a count of 2 or more and replicas 1 or absent for `false`), and refuses a
+  of the sides' CPU type and needs a GPU node that fits (`kube.node_fits`): its labels (`kube.share_fits`:
+  `nvidia.com/gpu.count` 1, `nvidia.com/gpu.replicas` 2 and `nvidia.com/gpu.sharing-strategy` `time-slicing` or absent
+  for `true`; a count of 2 or more, replicas 1 or absent and the strategy `none` or absent for `false`; so MPS never
+  fits, and a node without the strategy label, which older device plugins do not set, is judged by the other two), and
+  at least 2 `nvidia.com/gpu` in its `status.allocatable` (a device plugin with `renameByDefault: true` offers
+  time-sliced shares as `nvidia.com/gpu.shared` instead, under the same labels). It refuses a
   `compare.side.gpuResourceName` other than `nvidia.com/gpu` (a MIG resource included). Each GPU side pod of the mode
-  carries the matching required node affinity (`kube.share_affinity`); the second replica is pinned to the first
-  replica's `kubernetes.io/hostname` (also where the ReadWriteOnce model volume is), that node is checked again with
-  `share_fits`, and a second replica with no node after `kube.REPLICA_PENDING_S` (120 s) fails its launch. The router
+  carries the matching required node affinity (`kube.share_affinity`, the labels only; the scheduler checks the
+  allocatable); the second replica is pinned to the first replica's `kubernetes.io/hostname` (also where the
+  ReadWriteOnce model volume is), that node is checked again with `node_fits`, and a second replica
+  with no node after `kube.REPLICA_PENDING_S` (120 s) fails its launch. The router
   and GuideLLM run in the runner pod, in front of the side pods' IPs. A `ray-serve-llm` side mounts the live server's
   `llm.yaml`, so the docs say to keep `server.autoscaling` at one replica for this mode; nothing checks it. The
-  OpenShift backend reads no GPU UUIDs (no `gpus` or `gpu_uuids` in its server records); `prepare()` adds run notes
-  with the GPU share and the runner pod's open-file limit (`kube.open_file_limit`). The docker backend places
+  OpenShift backend reads no GPU UUIDs (no `gpus` or `gpu_uuids` in its server records); `prepare()` adds a run note
+  with the GPU share and raises the runner's own soft open-file limit to its hard limit (`kube.raise_open_files`,
+  through `router.raise_open_file_limit`), so GuideLLM, its child process, inherits it; a note gives the limit, and
+  another warns when it is below `kube.open_files_needed` (two for each request of the whole surge, plus
+  `kube.ROUTER_SPARE_FILES`). The docker backend places
   the replicas from `RHVP_COMPARE_REPLICA_GPUS` (else `RHVP_COMPARE_GPUS`) and refuses, as `PLAN_INVALID` before
   anything changes, a plan whose `sharedGpu` does not match (`DockerBackend.check_plan`); `prepare()` reads each
   replica's GPUs with nvidia-smi into the server records (`gpus`, `gpu_uuids`, both shown in `results.md` and the
@@ -479,8 +488,9 @@ Three parts, each off by default. With every default, the local charts render ex
   to a lower number, or set it but empty), since at docker's default soft limit of 1024 on the machine measured the
   router stopped taking connections at about 509 in flight; `router.serve` raises its own soft open-file limit to the
   hard limit when it starts and logs the limit before and after, and `router.OutOfFilesLog` logs running out of file
-  handles at most once a second, with a count of the lines left out. The OpenShift runner pod keeps its container
-  runtime's open-file limit, which the run's notes record; it has not been read on a cluster.
+  handles at most once a second, with a count of the lines left out. A pod spec has no open-file setting, so on
+  OpenShift the runner raises its own soft limit to the hard one, as the router does, and the run's notes record it;
+  the container runtime's limit on OpenShift has not been read.
   `scaleOut.requestRate`'s default (4) is a placeholder: the README's "Picking the surge rate" derives a rate from a
   levels run of the same sides, and `summary.surge_rate_fit` makes `results.md` and the notebook say when every scored
   surge of both sides met the goals, had at least half of its judged requests fail (`SURGE_FAILED_SHARE`), or had at
@@ -572,10 +582,12 @@ Not checked yet:
 - No server pod has been seen exporting `ray_vllm_num_requests_waiting` under that name; KEDA reads an empty answer
   as 0, so a wrong name means the server never scales, without an error.
 - `compileCache.mode` `node` and `shared`, and `fsGroupChangePolicy: OnRootMismatch`, on OpenShift.
-- The current scale-out mode (with twins) on a GPU or a cluster, and so its run length; the OpenShift scale round
-  of the comparison, which has run only in the unit tests against a fake Kubernetes API (not on kind or OpenShift, not
-  with GPU time-slicing, and not against real GPU feature discovery labels); the server records of OpenShift sides carry
-  no server environment (`env_source: "none"`).
+- The current scale-out mode (with twins) on a GPU or on OpenShift, and so its run length; the OpenShift scale round
+  of the comparison, which has run once on kind without a GPU (GuideLLM's mock servers, labels set by hand) in a
+  version before the allocatable and sharing-strategy checks and the runner's open-file raise, which have run only in
+  the unit tests, and not on OpenShift, not with GPU time-slicing, and not against real GPU feature discovery labels
+  (nor has the runner pod's open-file limit on OpenShift been read); the server records of OpenShift sides carry no
+  server environment (`env_source: "none"`).
 - An upscale replica that keeps failing: whether Ray then marks the app UNHEALTHY, which would remove the ready file
   and take the one serving replica out of the Service.
 - The comparison's scale-out mode on MIG devices: that nvidia-smi's GPU query lists the parent GPU's UUID in a

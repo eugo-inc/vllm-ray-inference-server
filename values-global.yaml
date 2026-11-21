@@ -192,9 +192,9 @@ global:
     #     # node with one GPU offered as two time-sliced shares
     #     # (timeSlicing in charts/all/nvidia-gpu-config/values.yaml).
     #     # false: each on a GPU of its own: on OpenShift a node with two GPUs
-    #     # or more and time-slicing off; with docker, given with REPLICA_GPUS
-    #     # (scripts/compare-local.sh). A run whose GPUs do not match this
-    #     # setting is refused before anything changes.
+    #     # or more and no GPU sharing (no time-slicing, no MPS); with docker,
+    #     # given with REPLICA_GPUS (scripts/compare-local.sh). A run whose
+    #     # GPUs do not match this setting is refused before anything changes.
     #     sharedGpu: true
 
 main:

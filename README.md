@@ -404,9 +404,12 @@ it also means a server at 0 replicas stays at 0 until someone scales it.
 
 If the server did not come back, the run says so: its Job exits 4, `run.server_restored` is `false` in the results,
 the status ConfigMap and the termination message, and the log's last lines give the commands below. If the runner's
-pod was killed outright (its node is lost, or it is force-deleted), nothing says so; check the server. Either way,
-delete any side pod left behind first (it holds the GPU and the model volume until its own time limit, up to about
-an hour and a half), then scale the server back:
+pod was killed outright (its node is lost, or it is force-deleted), nothing says so: the status ConfigMap stays at
+phase `running` after the Job has ended, and the server may already be back while a side pod still runs. Check both
+with `oc get pod -n vllm-inference -l app.kubernetes.io/name=image-compare-side` and
+`oc get deployment/ray-serve-llm -n vllm-inference`. Either way, delete any side pod left behind first
+(it holds the GPU and the model volume until its own time limit, up to about an hour and a half), then scale the
+server back:
 
 ```sh
 oc delete pod -n vllm-inference -l app.kubernetes.io/name=image-compare-side
@@ -930,7 +933,9 @@ Before you turn it on:
   image comparison checks only `vllm-inference` for other GPU pods: while it is on, a GPU pod from another namespace
   can share the GPU during a timed launch, and nothing refuses or flags the run (the GPU's product label, which the
   results record, ends in `-SHARED`). Turn it off before a comparison in mode `levels`. The comparison's mode
-  `scaleout` with `scaleOut.sharedGpu: true` needs it on, with two shares ("The benchmark's scale-out mode").
+  `scaleout` with `scaleOut.sharedGpu: true` needs it on, with two shares ("The benchmark's scale-out mode"); keep
+  other GPU work off the GPU nodes for that whole run, since the run catches only a pod that still holds the second
+  share when the second replica starts.
 - **Pods on more than one node** need the model volume as ReadWriteMany (`modelStorage.accessMode`), and a StorageClass
   that offers it. A volume's access mode cannot change after it is created: on a running install, delete PVC
   `ray-serve-llm-models` first, and the model downloads again. Use `compileCache.mode: shared`, not `node`, there.
@@ -1057,22 +1062,34 @@ IP addresses. Both replicas of a side run on one node: the second is pinned to t
 the model volume, ReadWriteOnce, on one node. `scaleOut.sharedGpu` decides which GPU nodes can hold them, read from
 the labels NVIDIA's GPU feature discovery puts on each node: `true` needs a node with one GPU offered as two
 time-sliced shares (`timeSlicing.enabled: true` and `replicas: 2` in `charts/all/nvidia-gpu-config/values.yaml`; the
-default AWS node, with its one L4, then fits), and `false` a node with two GPUs or more and time-slicing off. Before
+default AWS node, with its one L4, then fits; shares from MPS do not), and `false` a node with two GPUs or more and no
+GPU sharing (no time-slicing, no MPS). Either way the node must offer them to pods as `nvidia.com/gpu`, at least two:
+a device plugin set to `renameByDefault: true` offers time-sliced shares as `nvidia.com/gpu.shared` instead, which
+does not fit (the pattern's GPU chart sets it to `false`). Before
 anything changes, the runner lists the nodes of the sides' CPU type (in this mode the Job's ClusterRole also allows
 `list` on nodes) and refuses the run (exit 2, `PLAN_INVALID`) when no GPU node fits, naming what each one offers; the
 side pods also ask the scheduler for such a node (a required node affinity). A second replica that gets no node
 within 2 minutes fails its launch. While only the first replica runs, a GPU pod from another namespace can take the
-second share: the second replica then gets no node and the launch fails, rather than sharing the GPU with it.
+second share: if it still holds it when the second replica starts, the second replica gets no node and the launch
+fails, rather than sharing the GPU with it. A GPU pod from another namespace that holds the second share before the
+forced step and has ended by then still shares the GPU with the first replica, during its timed start or the surge
+before the step, and that launch is scored with nothing flagged; keep other GPU work off the GPU nodes for the whole
+run.
 `compare.side.gpuResourceName` must be `nvidia.com/gpu`. A `ray-serve-llm` side on OpenShift mounts the live
 server's `llm.yaml`, not the one-replica file the docker runner writes, so keep the server at one replica
 (`server.autoscaling`, the default) for this mode, or the side's pod may add vLLM replicas of its own. The runner reads
 no GPU UUIDs on OpenShift: the server
-records carry no `gpus` or `gpu_uuids`, and the run's notes say which GPU share the replicas had, and the runner pod's
-open-file limit (the router holds two connections for each request in flight). A stop in this mode also takes down
+records carry no `gpus` or `gpu_uuids`, and the run's notes say which GPU share the replicas had. A pod has no
+open-file setting, so before the first launch the runner raises its own soft open-file limit to its hard limit, which
+GuideLLM, a child process of the runner, inherits (the router does the same); the notes give the limit, and warn when
+it is below two for each request of the whole surge plus 64 (the router holds two connections for each request in
+flight). A stop in this mode also takes down
 the router and the second replica, so the Job's grace period is at least 420 seconds in this mode
 (`compare.terminationGracePeriodSeconds` in `charts/all/notebook/values.yaml`, 300 in mode `levels`). The OpenShift
-scale round has run only in the unit tests, against a fake Kubernetes API: not on a plain Kubernetes cluster, not on
-OpenShift and not on a GPU.
+scale round has run once on a plain Kubernetes cluster without a GPU (kind, with GuideLLM's mock servers and GPU
+feature discovery's labels set by hand), in an earlier version that did not yet check the node's GPU resource or
+sharing strategy or raise the runner's open-file limit; those have run only in the unit tests. It has not run on
+OpenShift or on a GPU.
 
 #### Picking the surge rate
 
@@ -1148,9 +1165,11 @@ and twin and gets NO VERDICT (`zero_floor`): the run checks the harness, not a r
   verdict. One completed; in it, one side's second replica answered only after the surge had ended. Two ended
   partial: at the rate they used, nearly every request missed the latency goals and some failed, so the share within
   the goals told the sides nothing, which is why "Picking the surge rate" exists. The current version, with twins,
-  has run end to end only with docker against GuideLLM's mock servers. It has not run on a GPU or on a cluster, and
-  its run length above is an estimate. Its OpenShift scale round has run only in the unit tests, against a fake
-  Kubernetes API, and GPU time-slicing has not run on a cluster with it.
+  has run end to end only against GuideLLM's mock servers: with docker, and once on a plain Kubernetes cluster without
+  a GPU, in an earlier version of its OpenShift scale round ("The benchmark's scale-out mode"). It has not run on a
+  GPU or on OpenShift, its run length above is an estimate, and GPU time-slicing has not run on a cluster with it. The
+  GPU feature discovery label names and values it reads come from NVIDIA's documentation, not from a node, and the
+  runner pod's open-file limit on OpenShift has not been read.
 - No run has used MIG devices. That `nvidia-smi`'s GPU query lists the parent GPU's UUID in a container given a MIG
   device, and that `nvidia-smi -L` lists the MIG device's own UUID under it, is from NVIDIA's documented output, not
   from a run here.

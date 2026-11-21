@@ -20,7 +20,8 @@ global:
 # for other GPU pods, and with shares a GPU pod from any namespace can run on
 # the GPU it times. Mode scaleout with scaleOut.sharedGpu: true needs it on,
 # with replicas 2, on a node with one GPU (README, "The benchmark's scale-out
-# mode").
+# mode"); keep other GPU work off the GPU nodes for that whole run: it catches
+# only a pod that still holds the second share when the second replica starts.
 # Switching this on or off restarts the device plugin on every GPU node.
 timeSlicing:
   enabled: false
