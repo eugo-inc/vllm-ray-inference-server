@@ -19,6 +19,11 @@ The runner starts it as a child process in its own container (`spawn`, used by d
   GuideLLM does with the requests still running when the surge ends), `in_flight`, `max_in_flight`, `first_at` and
   `last_at` (seconds since the epoch), and `first_request_at`, when the first completion request came in.
 - No timeout on a request and no limit on connections: either would add errors or a queue of the router's own.
+- Each request in flight holds two sockets here, one from the client and one to the replica, so the open-file limit
+  caps the requests in flight at about half of it (about 509 at docker's default of 1,024). At start the router
+  raises its soft open-file limit to the hard limit and logs both (`raise_open_file_limit`; compare-local.sh also
+  starts the runner container with a higher limit). Running out of file handles is logged at most once a second,
+  with a count of the errors left out (`OutOfFilesLog`).
 
 The server needs aiohttp, which the pinned GuideLLM image (the runner's image) carries; it is imported only when the
 server starts, so the rest of this module is standard library only and the runner can import it anywhere.
@@ -27,6 +32,7 @@ server starts, so the rest of this module is standard library only and the runne
 from __future__ import annotations
 
 import argparse
+import errno
 import json
 import os
 import signal
@@ -44,6 +50,8 @@ ADMIN = "/-/router"
 #: Headers that belong to one connection, not to the request or response the router passes on.
 HOP_BY_HOP = frozenset(("connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailers",
                         "transfer-encoding", "upgrade", "host", "content-length"))
+#: Out of file handles: this process's limit ("Too many open files") or the whole system's.
+OUT_OF_FILES = frozenset((errno.EMFILE, errno.ENFILE))
 
 
 class Backend:
@@ -116,6 +124,72 @@ class Picker:
     def stats(self) -> dict:
         return {"policy": POLICY, "first_request_at": self.first_request_at,
                 "backends": [b.stats() for b in self.backends]}
+
+
+def _limit_text(value: int, unlimited: int) -> str:
+    return "unlimited" if value == unlimited else str(value)
+
+
+def raise_open_file_limit() -> str:
+    """Raise this process's soft open-file limit to its hard limit, never above it, and return one line with the
+    values before and after (read back, not assumed). Never raises: when the limit cannot be read or raised, the line
+    says so and the router starts with the limit it has."""
+    try:
+        import resource
+    except ImportError:  # not a Unix system
+        return "router: open-file limit unknown here (no resource module), left as it is"
+    try:
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    except (OSError, ValueError) as error:
+        return f"router: could not read the open-file limit ({error}), left as it is"
+    unlimited = resource.RLIM_INFINITY
+    before = f"router: open-file limit {_limit_text(soft, unlimited)} (hard limit {_limit_text(hard, unlimited)})"
+    if soft == hard:
+        return f"{before}, already at the hard limit"
+    try:
+        resource.setrlimit(resource.RLIMIT_NOFILE, (hard, hard))
+        now = resource.getrlimit(resource.RLIMIT_NOFILE)[0]
+    except (OSError, ValueError) as error:
+        return f"{before}; could not raise it ({error}), left as it is"
+    return f"{before}, raised to {_limit_text(now, unlimited)}"
+
+
+class OutOfFilesLog:
+    """The event loop's exception handler while the router runs: an error from running out of file handles (`EMFILE`
+    or `ENFILE`, such as asyncio's "socket.accept() out of system resource", reported once per refused connection
+    and so thousands of times a second under load) is logged as one line, at most once per `interval_s`, and the
+    next line says how many were left out in between. Every other error goes to `fallback` (the loop's default
+    handler) as before. Standard library only, with the clock passed in, so it is tested without aiohttp."""
+
+    def __init__(self, fallback: Callable[[dict], None], write: Callable[[str], None] | None = None,
+                 clock: Callable[[], float] = time.monotonic, interval_s: float = 1.0) -> None:
+        self.fallback, self.clock, self.interval_s = fallback, clock, interval_s
+        self.write = write or (lambda line: print(line, flush=True))
+        self.total = self.left_out = 0
+        self._last_at: float | None = None
+
+    def __call__(self, loop, context: dict) -> None:
+        error = context.get("exception")
+        if not isinstance(error, OSError) or error.errno not in OUT_OF_FILES:
+            self.fallback(context)
+            return
+        self.total += 1
+        now = self.clock()
+        if self._last_at is not None and now - self._last_at < self.interval_s:
+            self.left_out += 1
+            return
+        line = f"router: {context.get('message') or 'error'}: {error}"
+        if self.left_out:
+            line += f" ({self.left_out} more like it in the last {now - self._last_at:.1f} s, not logged)"
+        self.write(line)
+        self._last_at, self.left_out = now, 0
+
+    def summary(self) -> str | None:
+        """The closing line, when any handle ran out: the total, and how many came after the last line logged."""
+        if not self.total:
+            return None
+        return (f"router: ran out of file handles {self.total} times in all; {self.left_out} of them after the last "
+                "line logged")
 
 
 # ---- the server (aiohttp) ----
@@ -201,20 +275,25 @@ def serve(host: str, port: int, backends: list[str]) -> None:
 
     from aiohttp import web
 
+    print(raise_open_file_limit(), flush=True)
     picker = Picker()
     for url in backends:
         picker.add(url)
 
     async def main() -> None:
+        loop = asyncio.get_running_loop()
+        out_of_files = OutOfFilesLog(loop.default_exception_handler)
+        loop.set_exception_handler(out_of_files)
         runner = web.AppRunner(make_app(picker), handler_cancellation=True, shutdown_timeout=5)
         await runner.setup()
         await web.TCPSite(runner, host, port).start()
         print(f"router listening on {host}:{port}, policy {POLICY}, replicas {backends}", flush=True)
         stop = asyncio.Event()
-        loop = asyncio.get_running_loop()
         for sig in (signal.SIGTERM, signal.SIGINT):
             loop.add_signal_handler(sig, stop.set)
         await stop.wait()
+        if (closing := out_of_files.summary()) is not None:
+            print(closing, flush=True)
         print(f"router stopping: {json.dumps(picker.stats())}", flush=True)
         await runner.cleanup()
 

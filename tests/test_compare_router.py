@@ -7,7 +7,12 @@ Run with: python -m pytest -q tests/test_compare_router.py
 """
 
 import asyncio
+import errno
 import importlib.util
+import os
+import signal
+import socket
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -42,6 +47,84 @@ def test_picker_sends_to_the_least_busy_and_ties_take_turns():
             for s in stats["backends"]] == [(2, 1, 0, 1, 0, 2), (2, 0, 1, 0, 1, 2)]
     with pytest.raises(LookupError):
         router.Picker().pick()
+
+
+needs_resource = pytest.mark.skipif(importlib.util.find_spec("resource") is None,
+                                    reason="open-file limits need the resource module (Unix)")
+
+
+class FakeLimits:
+    """getrlimit/setrlimit for RLIMIT_NOFILE without touching the test process's own limit."""
+
+    def __init__(self, soft, hard, refuse=None, unreadable=None):
+        self.limits, self.refuse, self.unreadable, self.calls = (soft, hard), refuse, unreadable, []
+
+    def getrlimit(self, which):
+        if self.unreadable:
+            raise self.unreadable
+        return self.limits
+
+    def setrlimit(self, which, limits):
+        self.calls.append(limits)
+        if self.refuse:
+            raise self.refuse
+        self.limits = limits
+
+
+@needs_resource
+@pytest.mark.parametrize("soft, hard, refuse, unreadable, calls, line", [
+    (1024, 524288, None, None, [(524288, 524288)],
+     "router: open-file limit 1024 (hard limit 524288), raised to 524288"),
+    (65536, 65536, None, None, [], "router: open-file limit 65536 (hard limit 65536), already at the hard limit"),
+    (1024, 4096, ValueError("not allowed"), None, [(4096, 4096)],
+     "router: open-file limit 1024 (hard limit 4096); could not raise it (not allowed), left as it is"),
+    (1024, 4096, None, OSError("no"), [], "router: could not read the open-file limit (no), left as it is"),
+    (1024, "unlimited", ValueError("current limit exceeds maximum limit"), None, [("unlimited", "unlimited")],
+     "router: open-file limit 1024 (hard limit unlimited); could not raise it (current limit exceeds maximum "
+     "limit), left as it is"),
+])
+def test_the_router_raises_its_open_file_limit_to_the_hard_limit(monkeypatch, soft, hard, refuse, unreadable, calls,
+                                                                  line):
+    import resource
+
+    def unlimited(value):
+        return resource.RLIM_INFINITY if value == "unlimited" else value
+
+    hard = unlimited(hard)
+    fake = FakeLimits(soft, hard, refuse, unreadable)
+    monkeypatch.setattr(resource, "getrlimit", fake.getrlimit)
+    monkeypatch.setattr(resource, "setrlimit", fake.setrlimit)
+    assert router.raise_open_file_limit() == line  # never raises, never above the hard limit
+    assert fake.calls == [tuple(unlimited(v) for v in c) for c in calls]
+
+
+def test_running_out_of_file_handles_is_logged_at_most_once_a_second():
+    now = [100.0]
+    lines, others = [], []
+    log = router.OutOfFilesLog(others.append, write=lines.append, clock=lambda: now[0])
+    emfile = {"message": "socket.accept() out of system resource",
+              "exception": OSError(errno.EMFILE, "Too many open files")}
+    for at in (100.0, 100.1, 100.5, 100.99, 101.0, 101.2, 102.5):
+        now[0] = at
+        log(None, emfile)
+    now[0] = 102.6
+    log(None, {"message": "socket.accept() out of system resource", "exception": OSError(errno.ENFILE, "full")})
+    other = [{"message": "a broken connection", "exception": ConnectionResetError()},
+             {"message": "out of buffers", "exception": OSError(errno.ENOBUFS, "No buffer space available")},
+             {"message": "no exception at all"}]
+    for context in other:
+        log(None, context)
+    assert others == other  # every other error still goes to the loop's default handler, as before
+    assert lines == [
+        "router: socket.accept() out of system resource: [Errno 24] Too many open files",
+        "router: socket.accept() out of system resource: [Errno 24] Too many open files (3 more like it in the last "
+        "1.0 s, not logged)",
+        "router: socket.accept() out of system resource: [Errno 24] Too many open files (1 more like it in the last "
+        "1.5 s, not logged)",
+    ]
+    assert (log.total, log.left_out) == (8, 1)
+    assert log.summary() == "router: ran out of file handles 8 times in all; 1 of them after the last line logged"
+    assert router.OutOfFilesLog(others.append).summary() is None
 
 
 # ---- the server ----
@@ -196,4 +279,64 @@ def test_spawn_starts_the_router_as_a_child_process(tmp_path):
     finally:
         process.stop()
     assert process.process.returncode == 0
-    assert "router listening on 127.0.0.1" in (tmp_path / "router.log").read_text()
+    log = (tmp_path / "router.log").read_text()
+    assert "router listening on 127.0.0.1" in log
+    assert "router: open-file limit " in log.splitlines()[0]  # one line, before the server starts
+
+
+@needs_aiohttp
+@needs_resource
+def test_a_router_out_of_file_handles_logs_one_line_a_second_and_keeps_serving(tmp_path):
+    """A real router child held at 32 open files (soft and hard, so it cannot raise them) gets 80 connections at
+    once: asyncio reports each refused accept, about a hundred a second here; the log gets one line a second and a
+    closing count. Once the connections close, the router answers again."""
+    port = router.free_port()
+    code = ("import resource, sys\n"
+            "resource.setrlimit(resource.RLIMIT_NOFILE, (32, 32))\n"
+            "from rhvp_compare import router\n"
+            "router.main(sys.argv[1:])\n")
+    log_path = tmp_path / "router.log"
+    env = {**os.environ, "PYTHONPATH": str(ROOT / "notebooks")}
+    with open(log_path, "w", encoding="utf-8") as log:
+        child = subprocess.Popen([sys.executable, "-c", code, "--port", str(port), "--backend", "http://127.0.0.1:9"],
+                                 stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, env=env)
+    clients, flood_started = [], time.monotonic()
+    try:
+        deadline = time.monotonic() + 30
+        while "router listening" not in log_path.read_text():
+            assert child.poll() is None and time.monotonic() < deadline, log_path.read_text()
+            time.sleep(0.1)
+        flood_started = time.monotonic()
+        for _ in range(80):
+            clients.append(socket.create_connection(("127.0.0.1", port), timeout=5))
+        time.sleep(3.5)
+        for client in clients:
+            client.close()
+        clients.clear()
+        deadline = time.monotonic() + 15
+        while True:  # the handles come back: the router answers again
+            try:
+                with socket.create_connection(("127.0.0.1", port), timeout=2) as probe:
+                    probe.sendall(b"GET /health HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+                    if probe.recv(64).startswith(b"HTTP/1.1 200"):
+                        break
+            except OSError:
+                pass
+            assert time.monotonic() < deadline, log_path.read_text()[-2000:]
+            time.sleep(0.2)
+    finally:
+        for client in clients:
+            client.close()
+        flood_s = time.monotonic() - flood_started
+        child.send_signal(signal.SIGTERM)
+        child.wait(timeout=15)
+    text = log_path.read_text()
+    logged = [line for line in text.splitlines() if "out of system resource" in line]
+    assert text.splitlines()[0] == "router: open-file limit 32 (hard limit 32), already at the hard limit"
+    assert 2 <= len(logged) <= flood_s + 2, text[-3000:]  # at most one line a second
+    assert all(line.startswith("router: socket.accept() out of system resource: [Errno 24]") for line in logged)
+    assert "Traceback" not in text
+    assert any("more like it in the last" in line for line in logged)
+    closing = [line for line in text.splitlines() if line.startswith("router: ran out of file handles ")]
+    assert len(closing) == 1 and int(closing[0].split()[6]) > 10 * len(logged)  # "... file handles N times in all"
+    assert child.returncode == 0

@@ -454,6 +454,11 @@ Three parts, each off by default. With every default, the local charts render ex
   and a whole GPU are compared by the parent's UUID. Each scored launch starts two servers (`plan.server_starts`: 66
   at the defaults, an estimate of about 5 to 7 hours, never timed on a GPU or a cluster); each case is a floor group of
   its own, the two primaries need 7 rounds, and at 8 all 8 must agree.
+  The router (`rhvp_compare/router.py`, a child of the runner) holds two connections for each request in flight:
+  `scripts/compare-local.sh` starts the runner container with `--ulimit nofile=65536:65536` (at docker's default of
+  1024 the router stopped taking connections at about 509 in flight), `router.serve` raises its own soft open-file
+  limit to the hard limit when it starts and logs the limit before and after, and `router.OutOfFilesLog` logs running
+  out of file handles at most once a second, with a count of the lines left out.
   `scaleOut.requestRate`'s default (4) is a placeholder: the README's "Picking the surge rate" derives a rate from a
   levels run of the same sides, and `summary.surge_rate_fit` makes `results.md` and the notebook say when every scored
   surge of both sides met the goals, had at least half of its judged requests fail (`SURGE_FAILED_SHARE`), or had at
