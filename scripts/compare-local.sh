@@ -47,6 +47,8 @@
 #   LOAD_IMAGE      the GuideLLM image the runner runs in (default: the pinned release); set it to the same
 #                   image when the config sets load.image
 #   NETWORK         docker network (default rhvp-compare)
+#   DOCKER_SOCKET   the docker daemon's socket, mounted into the runner at /var/run/docker.sock (default
+#                   /var/run/docker.sock); it must be the daemon the docker command here talks to
 #   MODELS_VOLUME   docker volume for /models (default rhvp-compare-models)
 #   GPUS            "all" (default) or a device id such as 0; give one id on a machine with several GPUs
 #   REPLICA_GPUS    mode scaleout: one device id per replica, comma-separated (for example 0,1, or two MIG
@@ -85,7 +87,7 @@ SIDE_MEMORY="${SIDE_MEMORY:-}"
 SERVER_CONTAINER="${SERVER_CONTAINER:-}"
 STOP_TIMEOUT="${STOP_TIMEOUT:-120}"
 RUNNER_NAME="rhvp-compare-runner-$$"
-SOCKET=/var/run/docker.sock
+SOCKET="${DOCKER_SOCKET:-/var/run/docker.sock}"
 
 [ -f "$CONFIG" ] || { echo "no config file at $CONFIG" >&2; exit 2; }
 [ -S "$SOCKET" ] || { echo "no docker socket at $SOCKET" >&2; exit 2; }
