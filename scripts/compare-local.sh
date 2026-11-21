@@ -35,8 +35,9 @@
 # process of the runner, like GuideLLM). Both replicas get GPUS unless REPLICA_GPUS gives each its own; the run is
 # refused when that does not match scaleOut.sharedGpu (true: one GPU for both, false: a GPU of its own for each).
 #
-# The runner container's open-file limit is 65536 (docker's default is 1024), for GuideLLM and the router: the router
-# holds two connections for each request in flight, so at 1024 it stopped accepting at about 509 in flight.
+# The runner container's open-file limit is RUNNER_OPEN_FILES, soft and hard (65536 by default; docker's default soft
+# limit was 1024 on the machine measured, and depends on the docker daemon's settings), for GuideLLM and the router:
+# the router holds two connections for each request in flight, so at 1024 it stopped accepting at about 509 in flight.
 #
 # Settings (environment variables):
 #   LOAD_IMAGE      the GuideLLM image the runner runs in (default: the pinned release); set it to the same
@@ -52,6 +53,8 @@
 #   CACHE_VOLUME    name prefix of the warm compile-cache volumes (default rhvp-compare-cache)
 #   HF_TOKEN        passed on when it starts with hf_ (gated models)
 #   RUNNER_MEMORY   memory limit of the runner container, GuideLLM included (default 8g)
+#   RUNNER_OPEN_FILES  open-file limit of the runner container, soft and hard (default 65536); empty leaves
+#                   docker's default
 #   SIDE_MEMORY     memory limit of each side's container, as docker writes it (default none, for example 32g)
 #   SERVER_CONTAINER  a container that normally holds the GPU: stopped for the run, started again after it (one
 #                   that stopped by itself before the run took it is left as it is; results.md says so)
@@ -73,6 +76,7 @@ REPLICA_GPUS="${REPLICA_GPUS:-}"
 CPUSET="${CPUSET:-}"
 CACHE_VOLUME="${CACHE_VOLUME:-rhvp-compare-cache}"
 RUNNER_MEMORY="${RUNNER_MEMORY:-8g}"
+RUNNER_OPEN_FILES="${RUNNER_OPEN_FILES-65536}"  # no colon: set but empty stays empty (docker's default)
 SIDE_MEMORY="${SIDE_MEMORY:-}"
 SERVER_CONTAINER="${SERVER_CONTAINER:-}"
 STOP_TIMEOUT="${STOP_TIMEOUT:-120}"
@@ -90,10 +94,12 @@ token_env=()
 case "${HF_TOKEN:-}" in hf_*) token_env=(-e HF_TOKEN) ;; esac
 cpuset_flag=()
 [ -z "$CPUSET" ] || cpuset_flag=(--cpuset-cpus "$CPUSET")
+ulimit_flag=()
+[ -z "$RUNNER_OPEN_FILES" ] || ulimit_flag=(--ulimit "nofile=$RUNNER_OPEN_FILES:$RUNNER_OPEN_FILES")
 
 docker run --rm --name "$RUNNER_NAME" --network "$NETWORK" \
   --label rhvp-compare.runner=1 --memory "$RUNNER_MEMORY" --stop-timeout "$STOP_TIMEOUT" --init \
-  --ulimit nofile=65536:65536 \
+  "${ulimit_flag[@]}" \
   "${cpuset_flag[@]}" \
   --user "$(id -u):$(id -g)" --group-add "$(stat -c %g "$SOCKET")" \
   -v "$SOCKET:/var/run/docker.sock" \

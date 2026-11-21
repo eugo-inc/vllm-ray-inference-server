@@ -16,7 +16,9 @@ import json
 import os
 import random
 import re
+import shutil
 import signal
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -1219,13 +1221,30 @@ def test_compare_local_passes_on_settings_the_docker_backend_reads():
     assert '"${cpuset_flag[@]}"' in script  # the runner container itself stays on the CPU set
 
 
-def test_compare_local_gives_the_runner_container_a_high_open_file_limit():
-    """The router (scale-out mode) holds two connections per request in flight; at docker's default open-file limit
-    of 1024 it stopped accepting at about 509 in flight. The flag must be on the runner's own docker run."""
+@pytest.mark.skipif(shutil.which("bash") is None, reason="runs the script's own setting lines with bash")
+@pytest.mark.parametrize("value, flag", [
+    (None, ["--ulimit", "nofile=65536:65536"]),  # unset: the default
+    ("4096", ["--ulimit", "nofile=4096:4096"]),
+    ("", []),  # set but empty: no flag, docker's default
+])
+def test_compare_local_gives_the_runner_container_a_high_open_file_limit(value, flag):
+    """The router (scale-out mode) holds two connections per request in flight; at docker's default soft open-file
+    limit of 1024 it stopped accepting at about 509 in flight. RUNNER_OPEN_FILES sets the runner's limit, soft and
+    hard (65536 when unset); set but empty, the runner gets no --ulimit flag. The flag must be on the runner's own
+    docker run. The script's own setting lines run here with bash, since the script itself needs a docker socket."""
     script = (ROOT / "scripts/compare-local.sh").read_text()
     start = script.index('docker run --rm --name "$RUNNER_NAME"')
     runner_command = script[start:script.index("-m rhvp_compare run", start)]
-    assert "--ulimit nofile=65536:65536" in runner_command
+    assert '"${ulimit_flag[@]}"' in runner_command and "--ulimit" not in runner_command
+    lines = [line for line in script.splitlines()
+             if line.startswith("RUNNER_OPEN_FILES=") or "ulimit_flag=" in line]
+    assert len(lines) == 3, lines
+    env = {k: v for k, v in os.environ.items() if k != "RUNNER_OPEN_FILES"}
+    if value is not None:
+        env["RUNNER_OPEN_FILES"] = value
+    program = "set -euo pipefail\n" + "\n".join(lines) + '\nfor a in "${ulimit_flag[@]}"; do echo "$a"; done\n'
+    out = subprocess.run(["bash", "-c", program], env=env, capture_output=True, text=True, check=True).stdout
+    assert out.splitlines() == flag
 
 
 def _main(tmp_path, backend, monkeypatch, **extra) -> tuple[int, Path, Path]:
