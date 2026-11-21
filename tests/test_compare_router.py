@@ -131,6 +131,31 @@ def test_running_out_of_file_handles_is_logged_at_most_once_a_second():
     assert router.OutOfFilesLog(others.append).summary() is None
 
 
+def test_accept_retries_after_the_listening_socket_closed_are_dropped_once_stopping():
+    """asyncio retries a failed accept() a second later (`BaseSelectorEventLoop._start_serving`); a retry that runs
+    after the router has closed its listening socket fails with "Invalid file descriptor: -1". Once `stopping` is
+    set, the handler drops those without a line; before that, and for every other error, the loop's default handler
+    still gets them."""
+    lines, others = [], []
+    log = router.OutOfFilesLog(others.append, write=lines.append, clock=lambda: 0.0)
+    retry = {"message": "Exception in callback BaseSelectorEventLoop._start_serving(<aiohttp.web_protocol...>, "
+                        "<socket.socket fd=-1, ...>, None, <Server sockets=()>, 128, None, None)",
+             "exception": ValueError("Invalid file descriptor: -1")}
+    log(None, retry)
+    assert others == [retry]  # while the router serves, it is not one to drop
+    log.stopping = True
+    log(None, retry)
+    other_value_error = {"message": "Exception in callback something_else()", "exception": ValueError("-1")}
+    no_exception = {"message": retry["message"]}
+    out_of_files = {"message": "socket.accept() out of system resource",
+                    "exception": OSError(errno.EMFILE, "Too many open files")}
+    for context in (other_value_error, no_exception, out_of_files):
+        log(None, context)
+    assert others == [retry, other_value_error, no_exception]
+    assert lines == ["router: socket.accept() out of system resource: [Errno 24] Too many open files"]
+    assert log.total == 1
+
+
 # ---- the server ----
 
 if importlib.util.find_spec("aiohttp") is not None:
@@ -382,4 +407,71 @@ def test_a_router_out_of_file_handles_logs_one_line_a_second_and_keeps_serving(t
     assert any("more like it in the last" in line for line in logged)
     closing = [line for line in text.splitlines() if line.startswith("router: ran out of file handles ")]
     assert len(closing) == 1 and int(closing[0].split()[6]) > 10 * len(logged)  # "... file handles N times in all"
+    assert child.returncode == 0
+
+
+@needs_aiohttp
+@needs_resource
+def test_a_router_stopped_while_out_of_file_handles_logs_no_traceback(tmp_path):
+    """A real router child held at 32 open files gets 80 connections at once and is stopped (SIGTERM) while they are
+    still open, with one request still waiting on a replica that holds it 2.5 s more. asyncio's accept() retries are
+    then still waiting, and they run while the router closes, after its listening socket is gone; each used to log a
+    traceback ("Invalid file descriptor: -1"). The log now has none, and the router exits 0."""
+    import threading
+
+    port = router.free_port()
+    replica_socket = socket.create_server(("127.0.0.1", 0))
+    held, release = [], threading.Event()
+
+    def hold_one():  # accepts the router's one request, sends nothing, closes it once released
+        connection, _ = replica_socket.accept()
+        held.append(connection)
+        release.wait(30)
+        connection.close()
+
+    holder = threading.Thread(target=hold_one, daemon=True)
+    holder.start()
+    code = ("import resource, sys\n"
+            "resource.setrlimit(resource.RLIMIT_NOFILE, (32, 32))\n"
+            "from rhvp_compare import router\n"
+            "router.main(sys.argv[1:])\n")
+    log_path = tmp_path / "router.log"
+    env = {**os.environ, "PYTHONPATH": str(ROOT / "notebooks")}
+    backend = f"http://127.0.0.1:{replica_socket.getsockname()[1]}"
+    with open(log_path, "w", encoding="utf-8") as log:
+        child = subprocess.Popen([sys.executable, "-c", code, "--port", str(port), "--backend", backend],
+                                 stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, env=env)
+    clients = []
+    try:
+        deadline = time.monotonic() + 30
+        while "router listening" not in log_path.read_text():
+            assert child.poll() is None and time.monotonic() < deadline, log_path.read_text()
+            time.sleep(0.1)
+        waiting = socket.create_connection(("127.0.0.1", port), timeout=5)
+        clients.append(waiting)
+        waiting.sendall(b"POST /v1/completions HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\n"
+                        b"Content-Length: 2\r\n\r\n{}")
+        deadline = time.monotonic() + 10
+        while not held:  # the request has reached the replica
+            assert time.monotonic() < deadline, log_path.read_text()
+            time.sleep(0.05)
+        for _ in range(80):
+            clients.append(socket.create_connection(("127.0.0.1", port), timeout=5))
+        time.sleep(1.5)
+        assert "out of system resource" in log_path.read_text()  # out of handles when the stop comes
+        child.send_signal(signal.SIGTERM)
+        time.sleep(2.5)  # retries that were waiting when the stop came run in this time
+        release.set()
+        child.wait(timeout=30)
+    finally:
+        release.set()
+        for client in clients:
+            client.close()
+        if child.poll() is None:
+            child.kill()
+            child.wait()
+        replica_socket.close()
+    text = log_path.read_text()
+    assert "router stopping: " in text
+    assert "Traceback" not in text and "Invalid file descriptor" not in text, text[-3000:]
     assert child.returncode == 0

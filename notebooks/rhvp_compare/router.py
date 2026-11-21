@@ -160,18 +160,24 @@ class OutOfFilesLog:
     `interval_s`, and the next line says how many were left out in between. asyncio reports that error once for each
     failed accept() call, up to 129 in one pass over the listening socket (aiohttp's listen backlog of 128, plus
     one), and each failed call schedules another pass a second later, so the passes pile up: under load it came
-    about 2,600 times a second. Every other error goes to `fallback` (the loop's default handler) as before. Standard
-    library only, with the clock passed in, so it is tested without aiohttp."""
+    about 2,600 times a second. Those passes that are still waiting when the router stops run after its listening
+    socket has closed, and each fails with "Invalid file descriptor: -1"; once `stopping` is set (`serve` sets it
+    just before it closes the socket), those are dropped without a line. Every other error goes to `fallback` (the
+    loop's default handler) as before. Standard library only, with the clock passed in, so it is tested without
+    aiohttp."""
 
     def __init__(self, fallback: Callable[[dict], None], write: Callable[[str], None] | None = None,
                  clock: Callable[[], float] = time.monotonic, interval_s: float = 1.0) -> None:
         self.fallback, self.clock, self.interval_s = fallback, clock, interval_s
         self.write = write or (lambda line: print(line, flush=True))
         self.total = self.left_out = 0
+        self.stopping = False
         self._last_at: float | None = None
 
     def __call__(self, loop, context: dict) -> None:
         error = context.get("exception")
+        if self.stopping and isinstance(error, ValueError) and "_start_serving" in str(context.get("message")):
+            return  # a waiting accept() pass that ran after the listening socket closed
         if not isinstance(error, OSError) or error.errno not in OUT_OF_FILES:
             self.fallback(context)
             return
@@ -297,6 +303,9 @@ def serve(host: str, port: int, backends: list[str]) -> None:
         if (closing := out_of_files.summary()) is not None:
             print(closing, flush=True)
         print(f"router stopping: {json.dumps(picker.stats())}", flush=True)
+        # asyncio retries each failed accept() a second later; once cleanup has closed the listening socket, those
+        # retries can only fail with "Invalid file descriptor: -1", one traceback each, so the handler drops them.
+        out_of_files.stopping = True
         await runner.cleanup()
 
     asyncio.run(main())
