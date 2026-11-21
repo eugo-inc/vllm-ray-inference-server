@@ -544,10 +544,15 @@ class KubeBackend:
             short = short or share_fits(labels, shared)  # the labels fit, the allocatable GPUs do not
             offered.append(node_offer(node))
         what = "; ".join(offered) or f"no node with the label {GPU_COUNT_LABEL}"
-        if short:
+        if short and shared:
             hint = (f"offer the shares to pods as {WHOLE_GPU_RESOURCE}: a node whose labels fit offers fewer than 2, "
                     f"as when the device plugin renames time-sliced shares to {WHOLE_GPU_RESOURCE}.shared "
-                    "(renameByDefault: true; charts/all/nvidia-gpu-config sets it to false)")
+                    "(renameByDefault: true; charts/all/nvidia-gpu-config sets it to false) or is still restarting "
+                    "after a time-slicing change (wait for it and run again)")
+        elif short:
+            hint = (f"use a node that offers at least 2 {WHOLE_GPU_RESOURCE} to pods: a node whose labels fit offers "
+                    "fewer than 2, as when one of its GPUs is unhealthy or the device plugin is still restarting "
+                    "(wait for it and run again)")
         elif shared:
             hint = ("turn on GPU time-slicing (not MPS) with 2 shares (timeSlicing.enabled: true, replicas: 2, in "
                     "charts/all/nvidia-gpu-config/values.yaml) on a node with one GPU")

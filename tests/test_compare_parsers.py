@@ -1815,6 +1815,15 @@ def test_the_plan_check_reads_the_gpu_nodes_once_and_names_what_they_offer():
     text = str(caught.value)
     assert "sharing strategy time-slicing, 0 nvidia.com/gpu allocatable" in text
     assert "renames time-sliced shares to nvidia.com/gpu.shared (renameByDefault: true" in text
+    assert "or is still restarting after a time-slicing change" in text
+    two_gpus = {kube.GPU_COUNT_LABEL: "2", kube.GPU_REPLICAS_LABEL: "1", kube.GPU_SHARING_LABEL: "none"}
+    one_offered = FakeCluster(labels=two_gpus, allocatable={"nvidia.com/gpu": "1"})
+    with pytest.raises(plans.PlanError) as caught:
+        one_offered.backend().check_plan(_kube_scale_plan(shared=False))  # nothing shared: no rename hint
+    text = str(caught.value)
+    assert "2 GPU, 1 share(s) each, sharing strategy none, 1 nvidia.com/gpu allocatable" in text
+    assert "use a node that offers at least 2 nvidia.com/gpu to pods" in text and "one of its GPUs is unhealthy" in text
+    assert "renameByDefault" not in text and "time-slic" not in text.split("To run it, ")[1]
     with pytest.raises(plans.PlanError, match="use a node with two GPUs or more and no GPU sharing"):
         FakeCluster().backend().check_plan(_kube_scale_plan(shared=False))
     FakeCluster(labels={kube.GPU_COUNT_LABEL: "2", kube.GPU_REPLICAS_LABEL: "1", kube.GPU_SHARING_LABEL: "none"}
