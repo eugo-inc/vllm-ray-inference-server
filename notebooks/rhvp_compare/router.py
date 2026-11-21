@@ -24,8 +24,8 @@ next to GuideLLM:
   caps the requests in flight at about half of it (about 509 at a soft limit of 1,024, docker's default on the
   machine measured). At start the router raises its soft open-file limit to the hard limit and logs both
   (`raise_open_file_limit`; compare-local.sh also starts the runner container with a higher limit, and on OpenShift
-  the runner records its pod's limit in the run's notes). Running out of file handles is logged at most once a
-  second, with a count of the errors left out (`OutOfFilesLog`).
+  the runner raises its own the same way, for GuideLLM, and records it in the run's notes). Running out of file
+  handles is logged at most once a second, with a count of the errors left out (`OutOfFilesLog`).
 
 The server needs aiohttp, which the pinned GuideLLM image (the runner's image) carries; it is imported only when the
 server starts, so the rest of this module is standard library only and the runner can import it anywhere.
@@ -132,20 +132,21 @@ def _limit_text(value: int, unlimited: int) -> str:
     return "unlimited" if value == unlimited else str(value)
 
 
-def raise_open_file_limit() -> str:
-    """Raise this process's soft open-file limit to its hard limit, never above it, and return one line with the
-    values before and after (read back, not assumed). Never raises: when the limit cannot be read or raised, the line
-    says so and the router starts with the limit it has."""
+def raise_open_file_limit(who: str = "router") -> str:
+    """Raise this process's soft open-file limit to its hard limit, never above it, and return one line, starting with
+    `who`, with the values before and after (read back, not assumed). Never raises: when the limit cannot be read or
+    raised, the line says so and the process goes on with the limit it has (the runner in mode scaleout on OpenShift
+    calls it too, kube.raise_open_files)."""
     try:
         import resource
     except ImportError:  # not a Unix system
-        return "router: open-file limit unknown here (no resource module), left as it is"
+        return f"{who}: open-file limit unknown here (no resource module), left as it is"
     try:
         soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
     except (OSError, ValueError) as error:
-        return f"router: could not read the open-file limit ({error}), left as it is"
+        return f"{who}: could not read the open-file limit ({error}), left as it is"
     unlimited = resource.RLIM_INFINITY
-    before = f"router: open-file limit {_limit_text(soft, unlimited)} (hard limit {_limit_text(hard, unlimited)})"
+    before = f"{who}: open-file limit {_limit_text(soft, unlimited)} (hard limit {_limit_text(hard, unlimited)})"
     if soft == hard:
         return f"{before}, already at the hard limit"
     try:

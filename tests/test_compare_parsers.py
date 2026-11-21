@@ -585,7 +585,10 @@ def test_the_openshift_job_refuses_a_scale_out_plan_no_gpu_node_can_hold_before_
     config.update(mode="scaleout", rounds={"count": 7, "warmup": False})
     path = tmp_path / "compare.json"
     path.write_text(json.dumps(config))
-    cluster = FakeCluster(labels={kube.GPU_REPLICAS_LABEL: "1"})  # one L4, time-slicing off
+    # One L4, time-slicing off, from a device plugin without the sharing-strategy label, so the shares alone refuse
+    # it. Any call that would change something fails the test at once: a check that wrongly passed would otherwise
+    # run the whole scale round against the fake.
+    cluster = FakeCluster(labels={kube.GPU_REPLICAS_LABEL: "1", kube.GPU_SHARING_LABEL: None}, read_only=True)
     backend = cluster.backend()
     with pytest.raises(plans.PlanError, match="scaleOut.sharedGpu is true: both replicas of a side run on one node"):
         runner.main_run(str(path), str(tmp_path / "results"), backend,
@@ -1617,18 +1620,30 @@ def test_the_server_environ_script_picks_the_largest_process(tmp_path):
 # ---- mode scaleout on OpenShift: the second replica's pod, the GPU share, the router and the surge ----
 
 L4_SHARED = {"kubernetes.io/hostname": "gpu-1", "kubernetes.io/arch": "amd64",
-             "nvidia.com/gpu.product": "NVIDIA-L4-SHARED", kube.GPU_COUNT_LABEL: "1", kube.GPU_REPLICAS_LABEL: "2"}
+             "nvidia.com/gpu.product": "NVIDIA-L4-SHARED", kube.GPU_COUNT_LABEL: "1", kube.GPU_REPLICAS_LABEL: "2",
+             kube.GPU_SHARING_LABEL: "time-slicing"}
+#: KubeBackend.prepare in mode scaleout raises the runner's own open-file limit; the tests keep the test process's.
+RAISE_OPEN_FILES = kube.raise_open_files
+
+
+@pytest.fixture(autouse=True)
+def _runner_open_files(monkeypatch):
+    monkeypatch.setattr(kube, "raise_open_files", lambda: (
+        "the runner: open-file limit 1048576 (hard limit 1048576), already at the hard limit", 1048576))
 
 
 class FakeCluster:
     """A fake Kubernetes API for the scale round. One GPU node (`labels` over an L4 offered as two time-sliced
-    shares); a pod is Running on it with an IP as soon as it is created, unless its name is in `unschedulable` (it
-    then stays Pending with the scheduler's message). The live server's Deployment is at 1, the status ConfigMaps
-    are kept, and every call is recorded as (method, path)."""
+    shares, a label set to None left out; `allocatable` its status.allocatable); a pod is Running on it with an IP as soon as it is created, unless
+    its name is in `unschedulable` (it then stays Pending with the scheduler's message). The live server's Deployment
+    is at 1, the status ConfigMaps are kept, and every call is recorded as (method, path). `read_only`: any call but a
+    GET fails the test at once (AssertionError, which the Kube client does not catch)."""
 
-    def __init__(self, labels: dict | None = None, unschedulable: tuple = (), extra_nodes: list | None = None):
-        self.labels = {**L4_SHARED, **(labels or {})}
-        self.extra_nodes, self.unschedulable = extra_nodes or [], set(unschedulable)
+    def __init__(self, labels: dict | None = None, unschedulable: tuple = (), extra_nodes: list | None = None,
+                 allocatable: dict | None = None, read_only: bool = False):
+        self.labels = {k: v for k, v in {**L4_SHARED, **(labels or {})}.items() if v is not None}
+        self.allocatable = {kube.WHOLE_GPU_RESOURCE: "2"} if allocatable is None else allocatable
+        self.extra_nodes, self.unschedulable, self.read_only = extra_nodes or [], set(unschedulable), read_only
         self.pods: dict[str, dict] = {}
         self.created: list[dict] = []
         self.calls: list[tuple] = []
@@ -1638,14 +1653,18 @@ class FakeCluster:
         path, method = request.url.path, request.method
         body = json.loads(request.content) if request.content else None
         self.calls.append((method, path))
+        if self.read_only and method != "GET":
+            raise AssertionError(f"nothing may change here, and the runner sent {method} {path}")
         pods = "/api/v1/namespaces/vllm-inference/pods"
         if path == "/api/v1/nodes":
             assert request.url.params["labelSelector"] == "kubernetes.io/arch=amd64"
-            return httpx.Response(200, json={"items": [{"metadata": {"name": "gpu-1.example", "labels": self.labels}},
+            return httpx.Response(200, json={"items": [{"metadata": {"name": "gpu-1.example", "labels": self.labels},
+                                                        "status": {"allocatable": self.allocatable}},
                                                        *self.extra_nodes]})
         if path.startswith("/api/v1/nodes/"):
             return httpx.Response(200, json={"metadata": {"name": path.rsplit("/", 1)[1], "labels": self.labels},
-                                             "status": {"nodeInfo": {"osImage": "RHCOS"}}})
+                                             "status": {"nodeInfo": {"osImage": "RHCOS"},
+                                                        "allocatable": self.allocatable}})
         if path == pods and method == "POST":
             pod = json.loads(json.dumps(body))
             name = pod["metadata"]["name"]
@@ -1718,9 +1737,35 @@ def _kube_scale_plan(shared: bool = True, gpu: bool = True, **extra) -> dict:
     ({kube.GPU_COUNT_LABEL: "1", kube.GPU_REPLICAS_LABEL: "1"}, False, False),
     ({}, True, False),  # not a GPU node, or no GPU feature discovery
     ({kube.GPU_COUNT_LABEL: "one", kube.GPU_REPLICAS_LABEL: "2"}, True, False),
+    # the sharing strategy: time-sliced shares only, and no sharing at all when not shared (absent: older plugins)
+    ({kube.GPU_COUNT_LABEL: "1", kube.GPU_REPLICAS_LABEL: "2", kube.GPU_SHARING_LABEL: "time-slicing"}, True, True),
+    ({kube.GPU_COUNT_LABEL: "1", kube.GPU_REPLICAS_LABEL: "2", kube.GPU_SHARING_LABEL: "mps"}, True, False),
+    ({kube.GPU_COUNT_LABEL: "1", kube.GPU_REPLICAS_LABEL: "2", kube.GPU_SHARING_LABEL: ""}, True, False),
+    ({kube.GPU_COUNT_LABEL: "2", kube.GPU_REPLICAS_LABEL: "1", kube.GPU_SHARING_LABEL: "none"}, False, True),
+    ({kube.GPU_COUNT_LABEL: "2", kube.GPU_SHARING_LABEL: "none"}, False, True),
+    ({kube.GPU_COUNT_LABEL: "2", kube.GPU_REPLICAS_LABEL: "1", kube.GPU_SHARING_LABEL: "time-slicing"}, False, False),
+    ({kube.GPU_COUNT_LABEL: "2", kube.GPU_REPLICAS_LABEL: "1", kube.GPU_SHARING_LABEL: "mps"}, False, False),
 ])
 def test_which_gpu_nodes_hold_a_scale_launch(labels, shared, fits):
     assert kube.share_fits(labels, shared) is fits
+
+
+@pytest.mark.parametrize("allocatable, shared, fits", [
+    ({"nvidia.com/gpu": "2"}, True, True),
+    ({"nvidia.com/gpu.shared": "2"}, True, False),  # the device plugin renamed the shares (renameByDefault: true)
+    ({"nvidia.com/gpu": "1"}, True, False),
+    ({}, True, False),
+    (None, True, False),
+    ({"nvidia.com/gpu": "4"}, False, True),
+    ({"nvidia.com/gpu": "1"}, False, False),  # one of the two GPUs is not offered (unhealthy)
+])
+def test_a_gpu_node_must_offer_the_two_replicas_their_gpu_resource(allocatable, shared, fits):
+    labels = ({kube.GPU_COUNT_LABEL: "1", kube.GPU_REPLICAS_LABEL: "2", kube.GPU_SHARING_LABEL: "time-slicing"}
+              if shared else {kube.GPU_COUNT_LABEL: "4", kube.GPU_SHARING_LABEL: "none"})
+    node = {"metadata": {"name": "gpu-1.example", "labels": labels},
+            **({} if allocatable is None else {"status": {"allocatable": allocatable}})}
+    assert kube.share_fits(labels, shared) is True  # the labels alone would let it through
+    assert kube.node_fits(node, shared) is fits
 
 
 def _matches(affinity: dict, labels: dict) -> bool:
@@ -1740,27 +1785,39 @@ def _matches(affinity: dict, labels: dict) -> bool:
 
 @pytest.mark.parametrize("count", ["1", "2", "4"])
 @pytest.mark.parametrize("replicas", [None, "1", "2", "4"])
+@pytest.mark.parametrize("strategy", [None, "none", "time-slicing", "mps"])
 @pytest.mark.parametrize("shared", [True, False])
-def test_the_node_affinity_asks_the_scheduler_for_the_nodes_the_check_accepts(count, replicas, shared):
-    labels = {kube.GPU_COUNT_LABEL: count, **({kube.GPU_REPLICAS_LABEL: replicas} if replicas else {})}
+def test_the_node_affinity_asks_the_scheduler_for_the_nodes_the_check_accepts(count, replicas, strategy, shared):
+    labels = {kube.GPU_COUNT_LABEL: count, **({kube.GPU_REPLICAS_LABEL: replicas} if replicas else {}),
+              **({kube.GPU_SHARING_LABEL: strategy} if strategy else {})}
     assert _matches(kube.share_affinity(shared), labels) is kube.share_fits(labels, shared)
 
 
 def test_the_plan_check_reads_the_gpu_nodes_once_and_names_what_they_offer():
     shared = _kube_scale_plan()
     FakeCluster().backend().check_plan(shared)  # the L4 offered as two shares
-    cluster = FakeCluster(labels={kube.GPU_REPLICAS_LABEL: "1"},
+    cluster = FakeCluster(labels={kube.GPU_REPLICAS_LABEL: "1", kube.GPU_SHARING_LABEL: "none"},
                           extra_nodes=[{"metadata": {"name": "cpu-1", "labels": {"kubernetes.io/arch": "amd64"}}}])
     with pytest.raises(plans.PlanError) as caught:
         cluster.backend().check_plan(shared)
     text = str(caught.value)
-    assert "the amd64 GPU nodes offer gpu-1.example: 1 GPU, 1 share(s) each" in text and "cpu-1" not in text
-    assert "timeSlicing.enabled: true, replicas: 2, in charts/all/nvidia-gpu-config/values.yaml" in text
+    assert ("the amd64 GPU nodes offer gpu-1.example: 1 GPU, 1 share(s) each, sharing strategy none, 2 "
+            "nvidia.com/gpu allocatable") in text and "cpu-1" not in text
+    assert "time-slicing (not MPS) with 2 shares (timeSlicing.enabled: true, replicas: 2, in " in text
+    assert "charts/all/nvidia-gpu-config/values.yaml" in text
     assert cluster.calls == [("GET", "/api/v1/nodes")]
-    with pytest.raises(plans.PlanError, match="use a node with two GPUs or more and GPU time-slicing off"):
+    with pytest.raises(plans.PlanError, match="sharing strategy mps, 2 nvidia.com/gpu allocatable.*not MPS"):
+        FakeCluster(labels={kube.GPU_SHARING_LABEL: "mps"}).backend().check_plan(shared)
+    renamed = FakeCluster(labels={"nvidia.com/gpu.product": "NVIDIA-L4"}, allocatable={"nvidia.com/gpu.shared": "2"})
+    with pytest.raises(plans.PlanError) as caught:
+        renamed.backend().check_plan(shared)  # the labels fit, but the node offers no nvidia.com/gpu
+    text = str(caught.value)
+    assert "sharing strategy time-slicing, 0 nvidia.com/gpu allocatable" in text
+    assert "renames time-sliced shares to nvidia.com/gpu.shared (renameByDefault: true" in text
+    with pytest.raises(plans.PlanError, match="use a node with two GPUs or more and no GPU sharing"):
         FakeCluster().backend().check_plan(_kube_scale_plan(shared=False))
-    FakeCluster(labels={kube.GPU_COUNT_LABEL: "2", kube.GPU_REPLICAS_LABEL: "1"}).backend().check_plan(
-        _kube_scale_plan(shared=False))
+    FakeCluster(labels={kube.GPU_COUNT_LABEL: "2", kube.GPU_REPLICAS_LABEL: "1", kube.GPU_SHARING_LABEL: "none"}
+                ).backend().check_plan(_kube_scale_plan(shared=False))
     with pytest.raises(plans.PlanError, match="compare.side.gpuResourceName is nvidia.com/mig-1g.10gb"):
         FakeCluster().backend(RHVP_COMPARE_GPU_RESOURCE="nvidia.com/mig-1g.10gb").check_plan(shared)
 
@@ -1810,7 +1867,69 @@ def test_the_second_replicas_pod_is_the_sides_on_the_first_replicas_node():
                                                      + plan["server"]["ready_timeout_s"])
     assert two["spec"]["activeDeadlineSeconds"] == one["spec"]["activeDeadlineSeconds"]
     assert any("2 time-sliced shares" in note for note in backend.notes)
-    assert any(note.startswith("the runner pod's open-file limit: soft ") for note in backend.notes)
+    assert any(note.startswith("the runner: open-file limit 1048576 ") and "GuideLLM, a child process of the runner, "
+               "inherits it" in note for note in backend.notes)
+    assert not any(note.startswith("warning:") for note in backend.notes)
+
+
+@pytest.mark.parametrize("soft, hard, refuse, calls, after, line", [
+    (1024, 524288, None, [(524288, 524288)], 524288,
+     "the runner: open-file limit 1024 (hard limit 524288), raised to 524288"),
+    (1024, 1024, None, [], 1024, "the runner: open-file limit 1024 (hard limit 1024), already at the hard limit"),
+    (1024, "unlimited", ValueError("current limit exceeds maximum limit"), [("unlimited", "unlimited")], 1024,
+     "the runner: open-file limit 1024 (hard limit unlimited); could not raise it (current limit exceeds maximum "
+     "limit), left as it is"),
+    ("unlimited", "unlimited", None, [], None,
+     "the runner: open-file limit unlimited (hard limit unlimited), already at the hard limit"),
+])
+def test_the_runner_raises_its_open_file_limit_for_guidellm(monkeypatch, soft, hard, refuse, calls, after, line):
+    # GuideLLM is a child process of the runner and inherits its soft limit; a pod spec cannot set one.
+    resource = pytest.importorskip("resource")
+
+    def unlimited(value):
+        return resource.RLIM_INFINITY if value == "unlimited" else value
+    limits, made = [unlimited(soft), unlimited(hard)], []
+
+    def getrlimit(which):
+        assert which == resource.RLIMIT_NOFILE
+        return tuple(limits)
+
+    def setrlimit(which, values):
+        assert which == resource.RLIMIT_NOFILE
+        made.append(values)
+        if refuse:
+            raise refuse
+        limits[:] = values
+    monkeypatch.setattr(resource, "getrlimit", getrlimit)
+    monkeypatch.setattr(resource, "setrlimit", setrlimit)
+    assert RAISE_OPEN_FILES() == (line, after)  # never raises, never above the hard limit
+    assert made == [tuple(unlimited(v) for v in c) for c in calls]
+
+
+@pytest.mark.parametrize("scale_out, soft, need, warned", [
+    ({"requestRate": 2.5, "surgeSeconds": 60}, 1048576, 2 * 150 + 64, False),
+    ({"requestRate": 2.5, "surgeSeconds": 60}, None, 2 * 150 + 64, False),  # unlimited, or not known
+    ({"requestRate": 2.5, "surgeSeconds": 60}, 364, 2 * 150 + 64, False),
+    ({"requestRate": 2.5, "surgeSeconds": 60}, 363, 2 * 150 + 64, True),
+    ({}, 1024, 2 * 1200 + 64, True),  # the default surge, 4 requests a second for 300 s, at docker's usual soft limit
+])
+def test_the_runs_notes_warn_when_the_open_file_limit_is_below_what_the_surge_could_need(monkeypatch, scale_out, soft,
+                                                                                          need, warned):
+    plan = _kube_scale_plan(scaleOut={"stepAfterSeconds": 10, "ttftMs": 300, "tpotMs": 25, "sharedGpu": True,
+                                      **scale_out})
+    assert kube.open_files_needed(plan["scale_out"]) == need and kube.ROUTER_SPARE_FILES == 64
+    raised = []
+    monkeypatch.setattr(kube, "raise_open_files", lambda: raised.append(1) or ("the runner: open-file limit x", soft))
+    backend = FakeCluster().backend()
+    backend.prepare(plan)
+    warnings = [n for n in backend.notes if n.startswith("warning:")]
+    assert bool(warnings) is warned
+    if warned:
+        assert warnings[0].startswith(f"warning: the runner's open-file limit is {soft}, below {need}: two for each "
+                                      f"of the surge's {(need - 64) // 2} requests, were all of them in flight")
+    levels = FakeCluster().backend()
+    levels.prepare(plans.build(_plan_config(), "openshift"))  # mode levels: no raise, no note
+    assert levels.notes == [] and len(raised) == 1
 
 
 def _plan_config_levels(plan: dict) -> dict:
@@ -1863,7 +1982,12 @@ def test_a_second_replica_is_not_placed_on_a_node_that_cannot_share_its_gpu():
     spec = plans.side_spec(plan, side)
     backend.start(plan, launch, side, spec)
     cluster.labels[kube.GPU_REPLICAS_LABEL] = "1"  # time-slicing turned off under the run
-    with pytest.raises(runner.RoundError, match="which has 1 GPU with 1 share"):
+    with pytest.raises(runner.RoundError, match="runs on node gpu-1.example: 1 GPU, 1 share.s. each"):
+        backend.start(plan, launch, side, spec, replica=2)
+    assert len(cluster.created) == 1
+    cluster.labels[kube.GPU_REPLICAS_LABEL] = "2"
+    cluster.allocatable = {"nvidia.com/gpu.shared": "2"}  # the shares renamed under the run
+    with pytest.raises(runner.RoundError, match="sharing strategy time-slicing, 0 nvidia.com/gpu allocatable"):
         backend.start(plan, launch, side, spec, replica=2)
     assert len(cluster.created) == 1
 
@@ -2003,5 +2127,5 @@ def test_a_scale_out_run_on_openshift(tmp_path, monkeypatch):
     assert results["provenance"]["gpu"]["product"] == "NVIDIA-L4-SHARED"
     notes = results["run"]["notes"]
     assert any("one GPU offered as 2 time-sliced shares" in n for n in notes)
-    assert any(n.startswith("the runner pod's open-file limit: ") for n in notes)
+    assert any(n.startswith("the runner: open-file limit ") for n in notes)
     assert ("POST", "/api/v1/namespaces/vllm-inference/pods") in cluster.calls

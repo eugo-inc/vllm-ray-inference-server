@@ -29,14 +29,18 @@ with the same image, arguments, environment and volumes, pinned to the node the 
 GuideLLM does in mode levels. Each replica asks for one nvidia.com/gpu, so two replicas share one GPU only through
 the GPU Operator's time-slicing. Before anything changes (`check_plan`) the runner lists the GPU nodes and refuses
 the plan unless one fits scaleOut.sharedGpu, read from GPU feature discovery's labels: true needs a node with one GPU
-(nvidia.com/gpu.count 1) offered as two shares (nvidia.com/gpu.replicas 2), so both replicas are on that GPU and,
-while both run, nothing else has a share of it; false needs a node with two GPUs or more and no time-slicing (shares
-1, or the label absent). Every GPU side pod of the mode carries a required node affinity for those labels, so the
+(nvidia.com/gpu.count 1) offered as two time-sliced shares (nvidia.com/gpu.replicas 2, and
+nvidia.com/gpu.sharing-strategy time-slicing or absent, not mps), so both replicas are on that GPU and, while both
+run, nothing else has a share of it; false needs a node with two GPUs or more and no sharing (shares 1 or the label
+absent, and the strategy none or absent). The node must also offer at least two nvidia.com/gpu to pods
+(status.allocatable): a device plugin that renames time-sliced shares to nvidia.com/gpu.shared keeps the labels but
+offers none (`node_fits`). Every GPU side pod of the mode carries a required node affinity for the labels, so the
 scheduler picks such a node. A second replica that has no node REPLICA_PENDING_S after it was asked for fails the
 launch with the scheduler's message (the GPU share it needs is held by something else, or the node is full). The
 GPU UUIDs are not read here (no exec into the side pods), so the server records carry no `gpus`; the run's notes say
-how the replicas share the GPU, and give the runner's own open-file limit, which GuideLLM runs with (a pod cannot
-set one; the router raises its own soft limit to the hard one and logs both).
+how the replicas share the GPU. A pod spec has no open-file setting, so before the first launch the runner raises its
+own soft open-file limit to the hard one, which GuideLLM, its child process, inherits (the router does the same and
+logs both); the notes give the limit, and warn when it is below what the surge could need (`open_files_needed`).
 
 One run at a time. Before it changes anything the runner lists the runner pods in its own namespace
 (app.kubernetes.io/name=image-compare): when another one is Pending or Running and is older (or as old, with a name
@@ -64,6 +68,7 @@ from __future__ import annotations
 
 import base64
 import json
+import math
 import os
 import socket
 import ssl
@@ -73,7 +78,7 @@ from collections.abc import Callable, Mapping
 
 import httpx
 
-from . import energy, guidellm, plan as plans, runner
+from . import energy, guidellm, plan as plans, router, runner
 
 SERVICE_ACCOUNT = Path("/var/run/secrets/kubernetes.io/serviceaccount")
 SIDE_APP = "image-compare-side"
@@ -101,9 +106,13 @@ RESTORE_WINDOW_S = 60.0
 GUIDELLM_STOP_S = 30.0
 #: The annotation that pauses a KEDA ScaledObject at a fixed replica count.
 KEDA_PAUSED = "autoscaling.keda.sh/paused-replicas"
-#: Mode scaleout: GPU feature discovery's node labels for the GPUs a node has and the shares each is offered as
-#: (time-slicing), the one GPU resource the mode places replicas by, and the pod label of a replica's number.
+#: Mode scaleout: GPU feature discovery's node labels for the GPUs a node has, the shares each is offered as, and how
+#: they are shared (time-slicing, mps or none; older device plugins do not set it), the one GPU resource the mode
+#: places replicas by, and the pod label of a replica's number.
 GPU_COUNT_LABEL, GPU_REPLICAS_LABEL = "nvidia.com/gpu.count", "nvidia.com/gpu.replicas"
+GPU_SHARING_LABEL = "nvidia.com/gpu.sharing-strategy"
+#: The values of GPU_SHARING_LABEL each setting of scaleOut.sharedGpu accepts (None: the label absent).
+GPU_SHARING_OK = {True: (None, "time-slicing"), False: (None, "none")}
 WHOLE_GPU_RESOURCE = "nvidia.com/gpu"
 LABEL_REPLICA = "rhvp-compare/replica"
 #: Mode scaleout: how long the second replica may wait for a node. The first replica runs on that node with the
@@ -111,6 +120,9 @@ LABEL_REPLICA = "rhvp-compare/replica"
 REPLICA_PENDING_S = 120.0
 #: How long the router may take to stop (router.Process.stop: SIGTERM, 10 s, SIGKILL, 10 s).
 ROUTER_STOP_S = 20.0
+#: Mode scaleout: the file handles the router may hold besides two sockets for each request in flight (its listening
+#: socket, its log, the event loop's own), for `open_files_needed`.
+ROUTER_SPARE_FILES = 64
 
 
 def stop_budget_seconds(replicas: int = 1) -> float:
@@ -335,41 +347,77 @@ def gpu_shares(labels: Mapping[str, str]) -> tuple[int | None, int]:
 
 
 def share_fits(labels: Mapping[str, str], shared: bool) -> bool:
-    """Whether a node can hold a scale launch's two replicas as scaleOut.sharedGpu declares: shared, one GPU offered
-    as exactly two shares; not shared, two GPUs or more, not time-sliced."""
+    """Whether a node's labels let it hold a scale launch's two replicas as scaleOut.sharedGpu declares: shared, one
+    GPU offered as exactly two time-sliced shares; not shared, two GPUs or more, not shared at all (no time-slicing,
+    no MPS). A node without the sharing-strategy label passes on the other two."""
     count, shares = gpu_shares(labels)
-    if count is None:
+    if count is None or labels.get(GPU_SHARING_LABEL) not in GPU_SHARING_OK[shared]:
         return False
     return count == 1 and shares == 2 if shared else count >= 2 and shares == 1
 
 
+def gpu_allocatable(node: Mapping) -> int | None:
+    """How many nvidia.com/gpu a node offers to pods (status.allocatable). None when it offers none, as when the
+    device plugin renames time-sliced shares to nvidia.com/gpu.shared (renameByDefault: true)."""
+    return _int(((node.get("status") or {}).get("allocatable") or {}).get(WHOLE_GPU_RESOURCE))
+
+
+def node_fits(node: Mapping, shared: bool) -> bool:
+    """`share_fits` on a node's labels, and the node offers the two replicas their nvidia.com/gpu (2 or more
+    allocatable). The node affinity can ask only for the labels; the scheduler checks the rest when it places a pod."""
+    labels = (node.get("metadata") or {}).get("labels") or {}
+    return share_fits(labels, shared) and (gpu_allocatable(node) or 0) >= 2
+
+
+def node_offer(node: Mapping) -> str:
+    """What a GPU node offers a scale launch, in a refusal: its GPUs, shares, sharing strategy and allocatable."""
+    meta = node.get("metadata") or {}
+    labels = meta.get("labels") or {}
+    count, shares = gpu_shares(labels)
+    return (f"{meta.get('name')}: {count} GPU, {shares} share(s) each, sharing strategy "
+            f"{labels.get(GPU_SHARING_LABEL) or 'not labeled'}, {gpu_allocatable(node) or 0} {WHOLE_GPU_RESOURCE} "
+            "allocatable")
+
+
 def share_affinity(shared: bool) -> dict:
-    """The required node affinity of a scale launch's GPU side pods: a node that fits `share_fits`."""
+    """The required node affinity of a scale launch's GPU side pods: a node whose labels fit `share_fits`."""
     if shared:
-        terms = [{"matchExpressions": [{"key": GPU_COUNT_LABEL, "operator": "In", "values": ["1"]},
-                                       {"key": GPU_REPLICAS_LABEL, "operator": "In", "values": ["2"]}]}]
+        gpus = [[{"key": GPU_COUNT_LABEL, "operator": "In", "values": ["1"]},
+                 {"key": GPU_REPLICAS_LABEL, "operator": "In", "values": ["2"]}]]
     else:
         several = {"key": GPU_COUNT_LABEL, "operator": "Gt", "values": ["1"]}
-        terms = [{"matchExpressions": [several, {"key": GPU_REPLICAS_LABEL, "operator": "DoesNotExist"}]},
-                 {"matchExpressions": [several, {"key": GPU_REPLICAS_LABEL, "operator": "In", "values": ["1"]}]}]
+        gpus = [[several, {"key": GPU_REPLICAS_LABEL, "operator": "DoesNotExist"}],
+                [several, {"key": GPU_REPLICAS_LABEL, "operator": "In", "values": ["1"]}]]
+    sharing = [{"key": GPU_SHARING_LABEL, "operator": "DoesNotExist"} if value is None else
+               {"key": GPU_SHARING_LABEL, "operator": "In", "values": [value]} for value in GPU_SHARING_OK[shared]]
+    terms = [{"matchExpressions": [*gpu, strategy]} for gpu in gpus for strategy in sharing]
     return {"nodeAffinity": {"requiredDuringSchedulingIgnoredDuringExecution": {"nodeSelectorTerms": terms}}}
 
 
 def share_text(shared: bool) -> str:
-    return ("one GPU offered as 2 time-sliced shares (nvidia.com/gpu.count 1, nvidia.com/gpu.replicas 2)" if shared
-            else "2 GPUs or more, not time-sliced (nvidia.com/gpu.count 2 or more, nvidia.com/gpu.replicas 1)")
+    return ("one GPU offered as 2 time-sliced shares (nvidia.com/gpu.count 1, nvidia.com/gpu.replicas 2, "
+            "nvidia.com/gpu.sharing-strategy time-slicing or not set, 2 nvidia.com/gpu allocatable)" if shared
+            else "2 GPUs or more, not shared (nvidia.com/gpu.count 2 or more, nvidia.com/gpu.replicas 1 or not set, "
+            "nvidia.com/gpu.sharing-strategy none or not set, 2 nvidia.com/gpu allocatable or more)")
 
 
-def open_file_limit() -> str:
-    """This process's open-file limit, soft and hard, as one phrase; what it could not read, said so."""
+def raise_open_files() -> tuple[str, int | None]:
+    """Mode scaleout: raise the runner's soft open-file limit to its hard limit, as the router raises its own
+    (router.raise_open_file_limit), so GuideLLM, which the runner starts as a child process, inherits it. Returns the
+    line for the run's notes and the soft limit read back after it (None when unlimited or not known). Never raises."""
+    line = router.raise_open_file_limit("the runner")
     try:
         import resource
-        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
-    except (ImportError, OSError, ValueError) as error:
-        return f"unknown ({type(error).__name__})"
-    unlimited = getattr(resource, "RLIM_INFINITY", -1)
-    return " ".join(("soft", "unlimited" if soft == unlimited else str(soft),
-                     "hard", "unlimited" if hard == unlimited else str(hard)))
+        soft = resource.getrlimit(resource.RLIMIT_NOFILE)[0]
+    except (ImportError, OSError, ValueError):
+        return line, None
+    return line, None if soft == resource.RLIM_INFINITY else soft
+
+
+def open_files_needed(scale: Mapping) -> int:
+    """An open-file limit at which the router cannot run out of handles in a surge: two sockets for each of the
+    surge's requests, were all of them in flight at once, and ROUTER_SPARE_FILES."""
+    return 2 * math.ceil(scale["request_rate"] * scale["surge_s"]) + ROUTER_SPARE_FILES
 
 
 class DcgmSampler:
@@ -471,7 +519,7 @@ class KubeBackend:
 
     def check_plan(self, plan: Mapping) -> None:
         """Mode scaleout with a GPU: refuse (PlanError, before anything changes) a plan no GPU node of the sides' CPU
-        type can hold as scaleOut.sharedGpu declares (`share_fits`), or a GPU resource other than nvidia.com/gpu."""
+        type can hold as scaleOut.sharedGpu declares (`node_fits`), or a GPU resource other than nvidia.com/gpu."""
         scale = self._scale(plan)
         if scale is None:
             return
@@ -486,19 +534,26 @@ class KubeBackend:
             raise plans.PlanError(
                 f"mode scaleout reads the GPU nodes before it starts, and {error} (in mode scaleout the Job's "
                 f"ClusterRole allows list on nodes)") from None
-        offered = []
+        offered, short = [], False
         for node in nodes:
             labels = (node.get("metadata") or {}).get("labels") or {}
-            count, shares = gpu_shares(labels)
-            if count is None:
+            if gpu_shares(labels)[0] is None:
                 continue
-            if share_fits(labels, shared):
+            if node_fits(node, shared):
                 return
-            offered.append(f"{(node.get('metadata') or {}).get('name')}: {count} GPU, {shares} share(s) each")
+            short = short or share_fits(labels, shared)  # the labels fit, the allocatable GPUs do not
+            offered.append(node_offer(node))
         what = "; ".join(offered) or f"no node with the label {GPU_COUNT_LABEL}"
-        hint = ("turn on GPU time-slicing with 2 shares (timeSlicing.enabled: true, replicas: 2, in "
-                "charts/all/nvidia-gpu-config/values.yaml) on a node with one GPU" if shared else
-                "use a node with two GPUs or more and GPU time-slicing off, or set scaleOut.sharedGpu: true")
+        if short:
+            hint = (f"offer the shares to pods as {WHOLE_GPU_RESOURCE}: a node whose labels fit offers fewer than 2, "
+                    f"as when the device plugin renames time-sliced shares to {WHOLE_GPU_RESOURCE}.shared "
+                    "(renameByDefault: true; charts/all/nvidia-gpu-config sets it to false)")
+        elif shared:
+            hint = ("turn on GPU time-slicing (not MPS) with 2 shares (timeSlicing.enabled: true, replicas: 2, in "
+                    "charts/all/nvidia-gpu-config/values.yaml) on a node with one GPU")
+        else:
+            hint = ("use a node with two GPUs or more and no GPU sharing (no time-slicing, no MPS), or set "
+                    "scaleOut.sharedGpu: true")
         raise plans.PlanError(
             f"scaleOut.sharedGpu is {str(shared).lower()}: both replicas of a side run on one node, which needs "
             f"{share_text(shared)}; the {self.arch} GPU nodes offer {what}. To run it, {hint}")
@@ -511,9 +566,18 @@ class KubeBackend:
                 f"mode scaleout on OpenShift: the two replicas of each scored launch are pods on one node with "
                 f"{share_text(scale['shared_gpu'])}; their GPU UUIDs are not read on OpenShift")
         if plan.get("mode") == plans.SCALEOUT:
-            self.notes.append(
-                f"the runner pod's open-file limit: {open_file_limit()}; GuideLLM runs with it, and the router raises "
-                f"its own soft limit to the hard one (router.log)")
+            line, soft = raise_open_files()
+            self.notes.append(f"{line}; GuideLLM, a child process of the runner, inherits it, and the router raises "
+                              "its own soft limit the same way (router.log)")
+            need, requests = open_files_needed(plan["scale_out"]), math.ceil(
+                plan["scale_out"]["request_rate"] * plan["scale_out"]["surge_s"])
+            if soft is not None and soft < need:
+                self.notes.append(
+                    f"warning: the runner's open-file limit is {soft}, below {need}: two for each of the surge's "
+                    f"{requests} requests, were all of them in flight at once, and {ROUTER_SPARE_FILES} more. The "
+                    "router holds two for each request in flight and fails new ones once it runs out (router.log "
+                    "says so); raise the open-file limit the container runtime gives pods, or lower "
+                    "scaleOut.requestRate or scaleOut.surgeSeconds")
         self._delete_run_pods()  # pods left by an earlier attempt of this run; also fails early without access
         token = self.kube.secret_value(self.namespace, self.hf_secret, self.hf_key) if self.hf_secret else None
         self.use_token = bool(token and token.startswith("hf_"))
@@ -689,7 +753,7 @@ class KubeBackend:
     def _first_replica_node(self, plan: Mapping, spec: Mapping) -> str:
         """The kubernetes.io/hostname of the node the launch's first replica runs on, where the second one must run
         too (its GPU share, and the ReadWriteOnce model volume). For a GPU side, that node is checked against
-        scaleOut.sharedGpu (`share_fits`; the node affinity already asked the scheduler for it)."""
+        scaleOut.sharedGpu (`node_fits`; the node affinity already asked the scheduler for its labels)."""
         pod = self._pod(self._first, fresh=True) if self._first is not None else None
         node_name = ((pod or {}).get("spec") or {}).get("nodeName")
         node = self.kube.node(node_name) if node_name else None
@@ -698,12 +762,10 @@ class KubeBackend:
             raise runner.RoundError("the second replica cannot be placed: the node of the first replica is not known",
                                     runner.SIDE_FAILED)
         scale = self._scale(plan) if spec.get("gpu") else None
-        if scale is not None and not share_fits(labels, scale["shared_gpu"]):
-            count, shares = gpu_shares(labels)
+        if scale is not None and not node_fits(node, scale["shared_gpu"]):
             raise runner.RoundError(
-                f"the first replica runs on node {node_name}, which has {count} GPU with {shares} share(s) each; "
-                f"scaleOut.sharedGpu {str(scale['shared_gpu']).lower()} needs {share_text(scale['shared_gpu'])}",
-                runner.SIDE_FAILED)
+                f"the first replica runs on node {node_offer(node)}; scaleOut.sharedGpu "
+                f"{str(scale['shared_gpu']).lower()} needs {share_text(scale['shared_gpu'])}", runner.SIDE_FAILED)
         return labels["kubernetes.io/hostname"]
 
     def _pod(self, handle: dict, fresh: bool = False) -> dict | None:
