@@ -20,10 +20,10 @@ The runner starts it as a child process in its own container (`spawn`, used by d
   `last_at` (seconds since the epoch), and `first_request_at`, when the first completion request came in.
 - No timeout on a request and no limit on connections: either would add errors or a queue of the router's own.
 - Each request in flight holds two sockets here, one from the client and one to the replica, so the open-file limit
-  caps the requests in flight at about half of it (about 509 at docker's default of 1,024). At start the router
-  raises its soft open-file limit to the hard limit and logs both (`raise_open_file_limit`; compare-local.sh also
-  starts the runner container with a higher limit). Running out of file handles is logged at most once a second,
-  with a count of the errors left out (`OutOfFilesLog`).
+  caps the requests in flight at about half of it (about 509 at a soft limit of 1,024, docker's default on the
+  machine measured). At start the router raises its soft open-file limit to the hard limit and logs both
+  (`raise_open_file_limit`; compare-local.sh also starts the runner container with a higher limit). Running out of
+  file handles is logged at most once a second, with a count of the errors left out (`OutOfFilesLog`).
 
 The server needs aiohttp, which the pinned GuideLLM image (the runner's image) carries; it is imported only when the
 server starts, so the rest of this module is standard library only and the runner can import it anywhere.
@@ -156,10 +156,12 @@ def raise_open_file_limit() -> str:
 
 class OutOfFilesLog:
     """The event loop's exception handler while the router runs: an error from running out of file handles (`EMFILE`
-    or `ENFILE`, such as asyncio's "socket.accept() out of system resource", reported once per refused connection
-    and so thousands of times a second under load) is logged as one line, at most once per `interval_s`, and the
-    next line says how many were left out in between. Every other error goes to `fallback` (the loop's default
-    handler) as before. Standard library only, with the clock passed in, so it is tested without aiohttp."""
+    or `ENFILE`, such as asyncio's "socket.accept() out of system resource") is logged as one line, at most once per
+    `interval_s`, and the next line says how many were left out in between. asyncio reports that error once for each
+    failed accept() call, up to 129 in one pass over the listening socket (aiohttp's listen backlog of 128, plus
+    one), and each failed call schedules another pass a second later, so the passes pile up: under load it came
+    about 2,600 times a second. Every other error goes to `fallback` (the loop's default handler) as before. Standard
+    library only, with the clock passed in, so it is tested without aiohttp."""
 
     def __init__(self, fallback: Callable[[dict], None], write: Callable[[str], None] | None = None,
                  clock: Callable[[], float] = time.monotonic, interval_s: float = 1.0) -> None:
