@@ -35,6 +35,9 @@
 # process of the runner, like GuideLLM). Both replicas get GPUS unless REPLICA_GPUS gives each its own; the run is
 # refused when that does not match scaleOut.sharedGpu (true: one GPU for both, false: a GPU of its own for each).
 #
+# The runner container's open-file limit is 65536 (docker's default is 1024), for GuideLLM and the router: the router
+# holds two connections for each request in flight, so at 1024 it stopped accepting at about 509 in flight.
+#
 # Settings (environment variables):
 #   LOAD_IMAGE      the GuideLLM image the runner runs in (default: the pinned release); set it to the same
 #                   image when the config sets load.image
@@ -90,6 +93,7 @@ cpuset_flag=()
 
 docker run --rm --name "$RUNNER_NAME" --network "$NETWORK" \
   --label rhvp-compare.runner=1 --memory "$RUNNER_MEMORY" --stop-timeout "$STOP_TIMEOUT" --init \
+  --ulimit nofile=65536:65536 \
   "${cpuset_flag[@]}" \
   --user "$(id -u):$(id -g)" --group-add "$(stat -c %g "$SOCKET")" \
   -v "$SOCKET:/var/run/docker.sock" \

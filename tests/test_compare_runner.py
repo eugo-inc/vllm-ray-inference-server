@@ -1218,6 +1218,16 @@ def test_compare_local_passes_on_settings_the_docker_backend_reads():
     assert passed <= read
     assert '"${cpuset_flag[@]}"' in script  # the runner container itself stays on the CPU set
 
+
+def test_compare_local_gives_the_runner_container_a_high_open_file_limit():
+    """The router (scale-out mode) holds two connections per request in flight; at docker's default open-file limit
+    of 1024 it stopped accepting at about 509 in flight. The flag must be on the runner's own docker run."""
+    script = (ROOT / "scripts/compare-local.sh").read_text()
+    start = script.index('docker run --rm --name "$RUNNER_NAME"')
+    runner_command = script[start:script.index("-m rhvp_compare run", start)]
+    assert "--ulimit nofile=65536:65536" in runner_command
+
+
 def _main(tmp_path, backend, monkeypatch, **extra) -> tuple[int, Path, Path]:
     """main_run with the fake server; returns (exit code, the results root, the termination message file)."""
     path = tmp_path / "compare.json"
