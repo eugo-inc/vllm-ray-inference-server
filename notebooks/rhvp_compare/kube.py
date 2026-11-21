@@ -107,8 +107,8 @@ GUIDELLM_STOP_S = 30.0
 #: The annotation that pauses a KEDA ScaledObject at a fixed replica count.
 KEDA_PAUSED = "autoscaling.keda.sh/paused-replicas"
 #: Mode scaleout: GPU feature discovery's node labels for the GPUs a node has, the shares each is offered as, and how
-#: they are shared (time-slicing, mps or none; older device plugins do not set it), the one GPU resource the mode
-#: places replicas by, and the pod label of a replica's number.
+#: they are shared (time-slicing, mps or none; a node without it is judged by the other two), the one GPU resource the
+#: mode places replicas by, and the pod label of a replica's number.
 GPU_COUNT_LABEL, GPU_REPLICAS_LABEL = "nvidia.com/gpu.count", "nvidia.com/gpu.replicas"
 GPU_SHARING_LABEL = "nvidia.com/gpu.sharing-strategy"
 #: The values of GPU_SHARING_LABEL each setting of scaleOut.sharedGpu accepts (None: the label absent).

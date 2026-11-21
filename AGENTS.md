@@ -455,7 +455,7 @@ Three parts, each off by default. With every default, the local charts render ex
   of the sides' CPU type and needs a GPU node that fits (`kube.node_fits`): its labels (`kube.share_fits`:
   `nvidia.com/gpu.count` 1, `nvidia.com/gpu.replicas` 2 and `nvidia.com/gpu.sharing-strategy` `time-slicing` or absent
   for `true`; a count of 2 or more, replicas 1 or absent and the strategy `none` or absent for `false`; so MPS never
-  fits, and a node without the strategy label, which older device plugins do not set, is judged by the other two), and
+  fits, and a node without the strategy label is judged by the other two), and
   at least 2 `nvidia.com/gpu` in its `status.allocatable` (a device plugin with `renameByDefault: true` offers
   time-sliced shares as `nvidia.com/gpu.shared` instead, under the same labels). It refuses a
   `compare.side.gpuResourceName` other than `nvidia.com/gpu` (a MIG resource included). Each GPU side pod of the mode

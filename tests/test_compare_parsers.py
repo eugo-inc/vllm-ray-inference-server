@@ -1737,7 +1737,7 @@ def _kube_scale_plan(shared: bool = True, gpu: bool = True, **extra) -> dict:
     ({kube.GPU_COUNT_LABEL: "1", kube.GPU_REPLICAS_LABEL: "1"}, False, False),
     ({}, True, False),  # not a GPU node, or no GPU feature discovery
     ({kube.GPU_COUNT_LABEL: "one", kube.GPU_REPLICAS_LABEL: "2"}, True, False),
-    # the sharing strategy: time-sliced shares only, and no sharing at all when not shared (absent: older plugins)
+    # the sharing strategy: time-sliced shares only, and none at all when not shared (absent: the other two decide)
     ({kube.GPU_COUNT_LABEL: "1", kube.GPU_REPLICAS_LABEL: "2", kube.GPU_SHARING_LABEL: "time-slicing"}, True, True),
     ({kube.GPU_COUNT_LABEL: "1", kube.GPU_REPLICAS_LABEL: "2", kube.GPU_SHARING_LABEL: "mps"}, True, False),
     ({kube.GPU_COUNT_LABEL: "1", kube.GPU_REPLICAS_LABEL: "2", kube.GPU_SHARING_LABEL: ""}, True, False),
