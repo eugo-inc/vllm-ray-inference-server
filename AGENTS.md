@@ -456,10 +456,11 @@ Three parts, each off by default. With every default, the local charts render ex
   its own, the two primaries need 7 rounds, and at 8 all 8 must agree.
   The router (`rhvp_compare/router.py`, a child of the runner) holds two connections for each request in flight:
   `scripts/compare-local.sh` starts the runner container with `--ulimit nofile=65536:65536`, soft and hard
-  (`RUNNER_OPEN_FILES`; set but empty, no flag), since at docker's default soft limit of 1024 on the machine measured
-  the router stopped taking connections at about 509 in flight; `router.serve` raises its own soft open-file limit to
-  the hard limit when it starts and logs the limit before and after, and `router.OutOfFilesLog` logs running out of
-  file handles at most once a second, with a count of the lines left out.
+  (`RUNNER_OPEN_FILES`, a whole number above 0; set but empty, no flag, and GuideLLM keeps docker's soft limit;
+  anything else exits 2 before docker runs), since at docker's default soft limit of 1024 on the machine measured the
+  router stopped taking connections at about 509 in flight; `router.serve` raises its own soft open-file limit to the
+  hard limit when it starts and logs the limit before and after, and `router.OutOfFilesLog` logs running out of file
+  handles at most once a second, with a count of the lines left out.
   `scaleOut.requestRate`'s default (4) is a placeholder: the README's "Picking the surge rate" derives a rate from a
   levels run of the same sides, and `summary.surge_rate_fit` makes `results.md` and the notebook say when every scored
   surge of both sides met the goals, had at least half of its judged requests fail (`SURGE_FAILED_SHARE`), or had at

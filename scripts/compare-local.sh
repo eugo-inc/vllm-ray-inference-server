@@ -38,6 +38,10 @@
 # The runner container's open-file limit is RUNNER_OPEN_FILES, soft and hard (65536 by default; docker's default soft
 # limit was 1024 on the machine measured, and depends on the docker daemon's settings), for GuideLLM and the router:
 # the router holds two connections for each request in flight, so at 1024 it stopped accepting at about 509 in flight.
+# Set but empty, it leaves docker's default: the router still raises its own soft limit to the hard one, but GuideLLM
+# keeps the soft limit, so at 1024 it can hold at most about 1,000 connections. A value that is not a whole number
+# above 0 stops the script before docker runs (exit 2). If docker refuses to start the runner with "error setting
+# rlimit", set RUNNER_OPEN_FILES to a lower number, or set it but empty.
 #
 # Settings (environment variables):
 #   LOAD_IMAGE      the GuideLLM image the runner runs in (default: the pinned release); set it to the same
@@ -53,8 +57,8 @@
 #   CACHE_VOLUME    name prefix of the warm compile-cache volumes (default rhvp-compare-cache)
 #   HF_TOKEN        passed on when it starts with hf_ (gated models)
 #   RUNNER_MEMORY   memory limit of the runner container, GuideLLM included (default 8g)
-#   RUNNER_OPEN_FILES  open-file limit of the runner container, soft and hard (default 65536); empty leaves
-#                   docker's default
+#   RUNNER_OPEN_FILES  open-file limit of the runner container, soft and hard: a whole number above 0 (default
+#                   65536), or empty for docker's default, which GuideLLM then keeps (see above)
 #   SIDE_MEMORY     memory limit of each side's container, as docker writes it (default none, for example 32g)
 #   SERVER_CONTAINER  a container that normally holds the GPU: stopped for the run, started again after it (one
 #                   that stopped by itself before the run took it is left as it is; results.md says so)
@@ -85,6 +89,12 @@ SOCKET=/var/run/docker.sock
 
 [ -f "$CONFIG" ] || { echo "no config file at $CONFIG" >&2; exit 2; }
 [ -S "$SOCKET" ] || { echo "no docker socket at $SOCKET" >&2; exit 2; }
+case "$RUNNER_OPEN_FILES" in
+  '') ;;
+  0* | *[!0-9]*)
+    echo "RUNNER_OPEN_FILES must be a whole number above 0, or empty for docker's default; got: $RUNNER_OPEN_FILES" >&2
+    exit 2 ;;
+esac
 
 # The pinned GuideLLM release (GUIDELLM_IMAGE in notebooks/rhvp_compare/plan.py; a test keeps the two equal).
 LOAD_IMAGE="${LOAD_IMAGE:-ghcr.io/vllm-project/guidellm:v0.8.1@sha256:015b22441020e6014b4c06d89882921eb29e9b9a6f2e274b253afef4029aa081}"

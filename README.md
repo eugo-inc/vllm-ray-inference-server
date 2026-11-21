@@ -650,10 +650,13 @@ docker on one machine with an NVIDIA GPU, with GPU power sampled by `nvidia-smi`
 - `SIDE_MEMORY` (for example `32g`) and `RUNNER_MEMORY` (default `8g`) limit the containers' memory. On a GPU whose
   memory is the machine's own, also lower `server.gpuMemoryUtilization` in the config: it is a share of all of it.
 - The runner container may hold 65536 open files (`--ulimit nofile=65536:65536`, soft and hard; docker's default soft
-  limit was 1024 on the machine measured, and depends on the docker daemon's settings). `RUNNER_OPEN_FILES` sets
-  another number, or, set but empty, leaves docker's default. In mode `scaleout` the router in it holds two
-  connections for each request in flight, and at 1024 it stopped taking new connections at about 509 requests in
-  flight.
+  limit was 1024 on the machine measured, and depends on the docker daemon's settings). `RUNNER_OPEN_FILES` sets another
+  whole number above 0, or, set but empty, leaves docker's default; anything else stops the script before docker runs
+  (exit 2). In mode `scaleout` the router in it holds two connections for each request in flight, and at 1024 it stopped
+  taking new connections at about 509 requests in flight. With docker's default, the router still raises its own soft
+  limit to the hard one, but GuideLLM keeps the soft limit, so at 1024 it can hold at most about 1,000 connections. If
+  docker refuses to start the runner with "error setting rlimit", set `RUNNER_OPEN_FILES` to a lower number, or set it
+  but empty.
 - `SERVER_CONTAINER` names a container that normally holds the GPU: the runner stops it before the first launch, once
   both images are pulled, and starts it again when the run ends, the counterpart of scaling the pattern's server on
   OpenShift. A stop during the pulls leaves it running. A container that was running when the run began but has
