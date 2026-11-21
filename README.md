@@ -929,7 +929,8 @@ Before you turn it on:
   mode; with more, the second pod fails to start. Time-slicing applies to every GPU node and every namespace, and the
   image comparison checks only `vllm-inference` for other GPU pods: while it is on, a GPU pod from another namespace
   can share the GPU during a timed launch, and nothing refuses or flags the run (the GPU's product label, which the
-  results record, ends in `-SHARED`). Turn it off before a comparison.
+  results record, ends in `-SHARED`). Turn it off before a comparison in mode `levels`. The comparison's mode
+  `scaleout` with `scaleOut.sharedGpu: true` needs it on, with two shares ("The benchmark's scale-out mode").
 - **Pods on more than one node** need the model volume as ReadWriteMany (`modelStorage.accessMode`), and a StorageClass
   that offers it. A volume's access mode cannot change after it is created: on a running install, delete PVC
   `ray-serve-llm-models` first, and the model downloads again. Use `compileCache.mode: shared`, not `node`, there.
@@ -974,9 +975,8 @@ the ScaledObject), and removes the pause when the run ends.
 `global.compare.mode: scaleout` measures how fast each image brings a second replica online under load, and how much
 of that load stays within latency goals. It keeps the comparison's rounds of A, A~same, B and B~same, its statistics
 and its verdicts ([How the verdicts are decided](#how-the-verdicts-are-decided)); the default mode, described above,
-is `levels`. For now `scaleout` runs only with docker
-(`scripts/compare-local.sh`); the OpenShift Job refuses it (exit 2, `PLAN_INVALID`) until its scale round is built.
-The commented example at the end of `global.compare` in `values-global.yaml` shows the settings.
+is `levels`. `scaleout` runs with docker (`scripts/compare-local.sh`) and as the OpenShift Job ("On OpenShift",
+below). The commented example at the end of `global.compare` in `values-global.yaml` shows the settings.
 
 Each scored launch, a twin's as well:
 
@@ -1030,9 +1030,9 @@ its own config with more replicas allowed (its `env` setting `RHVP_CONFIG` to su
 Energy is not measured in this mode.
 
 With `scaleOut.sharedGpu: true` (the default) both replicas of a side share one GPU: `server.gpuMemoryUtilization`
-defaults to 0.4 then, and the plan refuses more than 0.475. The setting does not place the replicas; `REPLICA_GPUS`
-does (below), and the run is refused before anything changes when the two disagree: `sharedGpu: true` needs both
-replicas on the same GPU (leave `REPLICA_GPUS` empty), `false` needs a different GPU id for each (such as `0,1`).
+defaults to 0.4 then, and the plan refuses more than 0.475. With docker the setting does not place the replicas;
+`REPLICA_GPUS` does (below), and the run is refused before anything changes when the two disagree: `sharedGpu: true`
+needs both replicas on the same GPU (leave `REPLICA_GPUS` empty), `false` a different GPU id for each (such as `0,1`).
 Before the first launch the runner reads, with `nvidia-smi`, the GPUs each replica's device request reaches, so a GPU
 id the machine lacks fails there, and so do two requests that reach the same GPU with `sharedGpu: false` (such as
 `0` and that GPU's UUID); every server record keeps the request (`gpus`) and those GPUs' UUIDs (`gpu_uuids`), and
@@ -1050,6 +1050,29 @@ volume too; a side's own `env` overrides them. `cold`, the default, starts every
 `results.md` and the notebook show each side's setting, and when the two sides differ they say so next to the
 primary cases: the start-up figures then compare the two cache settings together with the two images. The setting
 works in mode `levels` too.
+
+On OpenShift, each replica is a side pod of its own in `vllm-inference` (the second one's name ends in `-2`, and both
+carry the label `rhvp-compare/replica`), and the router and GuideLLM run in the runner's pod, in front of the pods'
+IP addresses. Both replicas of a side run on one node: the second is pinned to the node of the first, which also keeps
+the model volume, ReadWriteOnce, on one node. `scaleOut.sharedGpu` decides which GPU nodes can hold them, read from
+the labels NVIDIA's GPU feature discovery puts on each node: `true` needs a node with one GPU offered as two
+time-sliced shares (`timeSlicing.enabled: true` and `replicas: 2` in `charts/all/nvidia-gpu-config/values.yaml`; the
+default AWS node, with its one L4, then fits), and `false` a node with two GPUs or more and time-slicing off. Before
+anything changes, the runner lists the nodes of the sides' CPU type (in this mode the Job's ClusterRole also allows
+`list` on nodes) and refuses the run (exit 2, `PLAN_INVALID`) when no GPU node fits, naming what each one offers; the
+side pods also ask the scheduler for such a node (a required node affinity). A second replica that gets no node
+within 2 minutes fails its launch. While only the first replica runs, a GPU pod from another namespace can take the
+second share: the second replica then gets no node and the launch fails, rather than sharing the GPU with it.
+`compare.side.gpuResourceName` must be `nvidia.com/gpu`. A `ray-serve-llm` side on OpenShift mounts the live
+server's `llm.yaml`, not the one-replica file the docker runner writes, so keep the server at one replica
+(`server.autoscaling`, the default) for this mode, or the side's pod may add vLLM replicas of its own. The runner reads
+no GPU UUIDs on OpenShift: the server
+records carry no `gpus` or `gpu_uuids`, and the run's notes say which GPU share the replicas had, and the runner pod's
+open-file limit (the router holds two connections for each request in flight). A stop in this mode also takes down
+the router and the second replica, so the Job's grace period is at least 420 seconds in this mode
+(`compare.terminationGracePeriodSeconds` in `charts/all/notebook/values.yaml`, 300 in mode `levels`). The OpenShift
+scale round has run only in the unit tests, against a fake Kubernetes API: not on a plain Kubernetes cluster, not on
+OpenShift and not on a GPU.
 
 #### Picking the surge rate
 
@@ -1126,7 +1149,8 @@ and twin and gets NO VERDICT (`zero_floor`): the run checks the harness, not a r
   partial: at the rate they used, nearly every request missed the latency goals and some failed, so the share within
   the goals told the sides nothing, which is why "Picking the surge rate" exists. The current version, with twins,
   has run end to end only with docker against GuideLLM's mock servers. It has not run on a GPU or on a cluster, and
-  its run length above is an estimate. The OpenShift scale round is not built.
+  its run length above is an estimate. Its OpenShift scale round has run only in the unit tests, against a fake
+  Kubernetes API, and GPU time-slicing has not run on a cluster with it.
 - No run has used MIG devices. That `nvidia-smi`'s GPU query lists the parent GPU's UUID in a container given a MIG
   device, and that `nvidia-smi -L` lists the MIG device's own UUID under it, is from NVIDIA's documented output, not
   from a run here.
