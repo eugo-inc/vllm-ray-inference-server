@@ -10,7 +10,7 @@ metadata:
 spec:
   serviceAccountName: image-compare
   restartPolicy: Never
-  terminationGracePeriodSeconds: {{ .Values.compare.terminationGracePeriodSeconds }}
+  terminationGracePeriodSeconds: {{ include "notebook.compareGraceSeconds" . }}
   securityContext:
     runAsNonRoot: true
     seccompProfile:

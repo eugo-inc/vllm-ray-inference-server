@@ -392,7 +392,7 @@ def test_plan_scale_out_mode():
 
 
 @pytest.mark.parametrize("extra, platform, message", [
-    ({}, "openshift", "mode scaleout runs on the docker backend only"),
+    ({}, "kind", "mode scaleout runs on openshift and docker only; got platform kind"),
     ({"scaleOut": {"stepAfterSeconds": 40}}, "docker", "must be less than scaleOut.surgeSeconds"),
     ({"scaleOut": {"ttftMs": None, "tpotMs": None}}, "docker", "at least one latency goal"),
     ({"scaleOut": "fast"}, "docker", "scaleOut must be a map"),
@@ -421,7 +421,15 @@ def test_plan_warm_compile_cache_runs_on_docker_after_a_warm_up():
                     "docker")
 
 
-def test_the_scale_out_mock_config_builds_on_docker_only():
+def test_the_scale_out_mode_builds_on_both_platforms():
+    # The OpenShift Job runs the same scale round as docker (kube.py): the plan is the same but for the platform.
+    docker, openshift = plans.build(scale_config(), "docker"), plans.build(scale_config(), "openshift")
+    assert openshift["mode"] == "scaleout" and openshift["platform"] == "openshift"
+    assert {**openshift, "platform": "docker"} == docker
+    assert openshift["energy"]["source"] == "none"  # not measured in this mode on either platform
+
+
+def test_the_scale_out_mock_config_builds():
     """tests/fixtures/compare-scaleout-mock.json, the config of the docker mock run (scripts/compare-local.sh)."""
     mock = json.loads((FIXTURES / "compare-scaleout-mock.json").read_text())
     plan = plans.build(mock, "docker")
@@ -433,8 +441,7 @@ def test_the_scale_out_mock_config_builds_on_docker_only():
     assert spec["command"][:2] == ["sh", "-c"] and spec["gpu"] is False
     assert spec["args"][-2:] == ["--max-concurrent-requests", "2"] and "--port" in spec["args"]
     assert plan["sides"][0]["image"] == plan["sides"][1]["image"] == plans.GUIDELLM_IMAGE
-    with pytest.raises(plans.PlanError, match="docker backend only"):
-        plans.build(mock, "openshift")
+    assert plans.build(mock, "openshift")["launches"] == plan["launches"]  # its mock sides need no GPU there either
 
 
 def test_a_full_run(tmp_path):

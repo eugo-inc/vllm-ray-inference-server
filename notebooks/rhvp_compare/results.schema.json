@@ -537,7 +537,7 @@
       "properties": {
         "mode": {
           "const": "scaleout",
-          "description": "Set only in mode scaleout (the scale round in every scored launch, docker only); a plan without it is mode levels, the default."
+          "description": "Set only in mode scaleout (the scale round in every scored launch); a plan without it is mode levels, the default."
         },
         "model": {
           "type": "object",

@@ -37,8 +37,9 @@ share of requests that met the latency goals `ttftMs` and `tpotMs`); with Holm's
 are the fewest that can give a verdict, and at 8 rounds all 8 must lean the same way. A scale-up the server itself
 logged (the pattern's rhvp-scale line) is kept as a secondary case. A warm-up launch is the same in both modes (one
 replica, no load). A scored scale launch starts two servers, so a scaleout run starts more servers than it has
-launches (`server_starts`). The scale round runs on docker only (dockerapi.py, scripts/compare-local.sh) until the
-OpenShift round is built; on OpenShift the plan refuses the mode. Energy is not measured in this mode.
+launches (`server_starts`). The scale round runs on both platforms: docker (dockerapi.py, scripts/compare-local.sh)
+and OpenShift (kube.py, the comparison's Job), where each replica is a pod of its own on one node. Energy is not
+measured in this mode.
 
 Per side, `compileCache` is cold (the default: every start compiles in a fresh /cache) or warm (docker only: a volume
 kept for the whole run, filled by the side's warm-up launch, so every scored start of the side and of its twin finds
@@ -65,9 +66,8 @@ TWIN_CHOICES = ("both", A, B, "none")
 LEVELS, SCALEOUT = "levels", "scaleout"
 MODES = (LEVELS, SCALEOUT)
 DEFAULT_MODE = LEVELS
-#: The platforms each mode runs on. The scale round needs the docker backend's router until the OpenShift scale
-#: round is built, so the OpenShift Job (kube.py) gets PLAN_INVALID for scaleout.
-MODE_PLATFORMS = {LEVELS: ("openshift", "docker"), SCALEOUT: ("docker",)}
+#: The platforms each mode runs on.
+MODE_PLATFORMS = {LEVELS: ("openshift", "docker"), SCALEOUT: ("openshift", "docker")}
 #: `sides[].compileCache`: cold (a fresh /cache at every start) or warm (docker only, see the docstring).
 COMPILE_CACHES = ("cold", "warm")
 #: In scaleout mode, each replica's share of its GPU's memory when the config does not set
@@ -458,8 +458,7 @@ def build(config: Mapping, platform: str = "openshift") -> dict:
     if mode not in MODES:
         raise PlanError(f"mode must be one of {', '.join(MODES)}; got {mode!r}")
     if platform not in MODE_PLATFORMS[mode]:
-        raise PlanError(f"mode {mode} runs on the docker backend only (scripts/compare-local.sh) until the OpenShift "
-                        f"scale round is built; use mode {DEFAULT_MODE} on {platform}")
+        raise PlanError(f"mode {mode} runs on {' and '.join(MODE_PLATFORMS[mode])} only; got platform {platform}")
     scale_mode = mode == SCALEOUT
     run_name = cfg.get("runName")
     if not isinstance(run_name, str) or not NAME.match(run_name):

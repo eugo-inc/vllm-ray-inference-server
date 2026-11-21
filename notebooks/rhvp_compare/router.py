@@ -1,12 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
-"""The router of the docker scale round: one HTTP endpoint in front of a side's replicas, sending each request to
+"""The router of the scale round: one HTTP endpoint in front of a side's replicas, sending each request to
 the replica with the fewest requests in flight (ties take turns).
 
 Why a router: GuideLLM keeps its connections open, so behind a balancer that spreads connections (a Kubernetes
 Service) a replica added during the surge would get almost no requests. This router chooses per request, and counts
 what each replica got, so a launch can show that the new replica took part of the surge.
 
-The runner starts it as a child process in its own container (`spawn`, used by dockerapi.py), next to GuideLLM:
+The runner starts it as a child process in its own container or pod (`spawn`, used by dockerapi.py and kube.py),
+next to GuideLLM:
 
     python -m rhvp_compare.router --port 8787 --backend http://side-1:8000
 
@@ -22,8 +23,9 @@ The runner starts it as a child process in its own container (`spawn`, used by d
 - Each request in flight holds two sockets here, one from the client and one to the replica, so the open-file limit
   caps the requests in flight at about half of it (about 509 at a soft limit of 1,024, docker's default on the
   machine measured). At start the router raises its soft open-file limit to the hard limit and logs both
-  (`raise_open_file_limit`; compare-local.sh also starts the runner container with a higher limit). Running out of
-  file handles is logged at most once a second, with a count of the errors left out (`OutOfFilesLog`).
+  (`raise_open_file_limit`; compare-local.sh also starts the runner container with a higher limit, and on OpenShift
+  the runner records its pod's limit in the run's notes). Running out of file handles is logged at most once a
+  second, with a count of the errors left out (`OutOfFilesLog`).
 
 The server needs aiohttp, which the pinned GuideLLM image (the runner's image) carries; it is imported only when the
 server starts, so the rest of this module is standard library only and the runner can import it anywhere.
