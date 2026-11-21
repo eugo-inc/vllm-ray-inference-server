@@ -211,7 +211,7 @@ def scale_events(log: str) -> list[dict]:
                 continue
         try:
             raw, _ = decoder.raw_decode(text, start)
-        except ValueError:
+        except (ValueError, RecursionError):
             continue
         record = _scale_record(raw)
         if record is not None:
@@ -232,14 +232,17 @@ def _json_log_message(decoder: json.JSONDecoder, text: str, at: float | None) ->
         return text, at
     try:
         record, _ = decoder.raw_decode(text, start)
-    except ValueError:
+    except (ValueError, RecursionError):
         return text, at
     message = record.get("message") if isinstance(record, dict) else None
     if not isinstance(message, str):
         return text, at
     stamp = record.get("timestamp_ns")
     if at is None and isinstance(stamp, int) and not isinstance(stamp, bool):
-        at = stamp / 1e9
+        try:
+            at = stamp / 1e9
+        except OverflowError:
+            pass
     return message, at
 
 
