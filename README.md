@@ -256,6 +256,11 @@ What the cluster's installs must provide:
   and `scripts/render-charts.sh` refuse it. The comparison's runner reads the GPU nodes' labels before a scale-out
   run and refuses one that cannot run.
 
+On a cluster that already has a GPU node for the server, also set `global.gpuMachineSet: none`. With `create` the
+install on AWS still adds a g6.2xlarge, which AWS bills by the hour and which may sit idle. The server tolerates only
+taints whose key is `gpu.taintKey` in `charts/all/ray-serve-llm/values.yaml` (`nvidia.com/gpu` by default): if your
+GPU nodes carry a taint with another key, set it there.
+
 With `reuse` the pattern assumes no name for the ClusterPolicy, the NodeFeatureDiscovery or the operators'
 namespaces. A few commands in this README and in AGENTS.md use `nvidia-gpu-operator`, the namespace NVIDIA's
 OpenShift guide uses; use yours.
@@ -281,6 +286,7 @@ next to the cluster's.
    - `global.gpuMachineSet`: `create` (one AWS g6.2xlarge) or `none`.
    - `global.gpuOperators`: `install` (the default) or `reuse`, on a cluster that already runs Node Feature
      Discovery and the NVIDIA GPU Operator ([Reuse the cluster's GPU operators](#reuse-the-clusters-gpu-operators)).
+     If that cluster already has a GPU node for the server, set `global.gpuMachineSet: none` too.
    - `global.model.*`: optional.
 
    Commit and push:

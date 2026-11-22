@@ -776,7 +776,9 @@ it to sync.
 2. Edit `values-global.yaml`:
    - `global.gpuMachineSet`: `create` (the default: one AWS g6.2xlarge with one L4) or `none`.
    - `global.gpuOperators`: `install` (the default: the pattern installs NFD and the NVIDIA GPU Operator) or
-     `reuse` (the cluster already runs both; README, "Reuse the cluster's GPU operators").
+     `reuse` (the cluster already runs both; README, "Reuse the cluster's GPU operators"). If that cluster already
+     has a GPU node for the server, set `global.gpuMachineSet: none` too, and `gpu.taintKey` in
+     `charts/all/ray-serve-llm/values.yaml` if its GPU nodes are tainted with a key other than `nvidia.com/gpu`.
    - `global.model.id`: the name clients send as `model`.
    - `global.model.source`: the Hugging Face repo id.
    - `global.model.revision`: the Hugging Face commit to pin.
