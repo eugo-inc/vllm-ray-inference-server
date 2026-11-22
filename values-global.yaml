@@ -160,10 +160,14 @@ global:
       primary: null
     energy:
       # Tokens per joule from GPU-only power. auto: DCGM (NVIDIA GPU
-      # Operator) through the cluster's monitoring, read every 2 s while the
-      # comparison is on; none: no tokens per joule. A level with fewer power
-      # samples than energy.minSamples (10) gets no figure, and at 8 rounds one
-      # missing figure of side A or B costs a primary case its verdict.
+      # Operator) through the cluster's monitoring; none: no tokens per joule.
+      # With global.gpuOperators install, the pattern's ClusterPolicy reads
+      # power every 2 s while the comparison is on. With reuse, the cluster's
+      # ClusterPolicy must (README, "Reuse the cluster's GPU operators"), or
+      # set none here: nothing checks the interval before a run. A level with
+      # fewer power samples than energy.minSamples (10) gets no figure, and at
+      # 8 rounds one missing figure of side A or B costs a primary case its
+      # verdict.
       source: auto
     # Mode scaleout, for scripts/compare-local.sh (its config file is JSON
     # with these keys, plus model). Its rounds are the same A, A~same, B,
@@ -208,7 +212,9 @@ global:
     #     tpotMs: 100      # goal: inter-token latency, at most
     #     # Both replicas of a side on one GPU. On OpenShift that needs a
     #     # node with one GPU offered as two time-sliced shares
-    #     # (timeSlicing in charts/all/nvidia-gpu-config/values.yaml).
+    #     # (timeSlicing in charts/all/nvidia-gpu-config/values.yaml; with
+    #     # global.gpuOperators reuse, time-slicing in the cluster's own
+    #     # ClusterPolicy, 2 shares, renameByDefault: false).
     #     # false: each on a GPU of its own: on OpenShift a node with two GPUs
     #     # or more and no GPU sharing (no time-slicing, no MPS); with docker,
     #     # given with REPLICA_GPUS (scripts/compare-local.sh). A run whose
