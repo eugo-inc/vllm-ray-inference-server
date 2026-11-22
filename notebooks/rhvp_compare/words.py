@@ -213,8 +213,7 @@ ENERGY_MISSING = "No energy figure for: {what}. The results file says why, in ea
 
 # ---- section 4: scale-out ----
 
-SCALE_OFF = ("No scale round in this run: it ran in mode levels, at fixed numbers of concurrent streams. Mode "
-             "scaleout runs with the docker backend (scripts/compare-local.sh) for now.")
+SCALE_OFF = "No scale round in this run: it ran in mode levels, at fixed numbers of concurrent streams."
 SCALE_LINE = ("Surge: {rate:g} requests per second for {surge:g} s. Forced step: the second replica is asked for "
               "{step:g} s after the surge's first request. Latency goals: {goals}. Router: the replica with the "
               "fewest requests in flight.")

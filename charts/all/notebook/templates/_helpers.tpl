@@ -71,3 +71,16 @@ image-registry.openshift-image-registry.svc:5000/{{ .Release.Namespace }}/notebo
 {{- define "notebook.compareEnergy" -}}
 {{- ((.Values.global.compare | default dict).energy | default dict).source | default "auto" -}}
 {{- end }}
+
+{{/* The comparison's mode: levels (the default) or scaleout (notebook.compareConfig refuses any other). */}}
+{{- define "notebook.compareMode" -}}
+{{- (.Values.global.compare | default dict).mode | default "levels" -}}
+{{- end }}
+
+{{/* The runner pod's grace period: compare.terminationGracePeriodSeconds, and in mode scaleout at least 420 s,
+     since a stop then also takes down the router and a second side pod (kube.stop_budget_seconds(2), 370 s;
+     tests/test_charts.py keeps each mode's value above its budget). */}}
+{{- define "notebook.compareGraceSeconds" -}}
+{{- $grace := int .Values.compare.terminationGracePeriodSeconds -}}
+{{- if eq (include "notebook.compareMode" .) "scaleout" }}{{ max $grace 420 }}{{ else }}{{ $grace }}{{ end -}}
+{{- end }}

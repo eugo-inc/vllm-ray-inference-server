@@ -69,7 +69,9 @@ compare:
   activeDeadlineSeconds: 172800
   # How long the runner has to stop cleanly after SIGTERM (a deleted Job, or the
   # time limit above): it cuts the current launch short, deletes its side pod,
-  # scales the pattern's server back and saves the results as partial.
+  # scales the pattern's server back and saves the results as partial. In mode
+  # scaleout the Job gets at least 420: a stop then also takes down the router
+  # and the launch's second side pod.
   terminationGracePeriodSeconds: 300
   # The pattern's own server, in notebook.serverNamespace. The runner scales it
   # to 0 before the first launch and back to serverReplicas when the run ends,

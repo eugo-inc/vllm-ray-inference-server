@@ -328,12 +328,28 @@ def test_compare_pauses_the_server_autoscaler_in_keda_mode(compare, render):
 
 def test_compare_config_passes_global_compare_through(render):
     # mode scaleout and any nested block of global.compare reach compare.json as given: the runner, not the chart,
-    # decides what they mean (and refuses what it has not built).
+    # decides what they mean (and refuses what it cannot run).
     items = docs(render / "charts/notebook-compare-scaleout.yaml")
     config = json.loads(one(items, "ConfigMap")["data"]["compare.json"])
     want = {k: v for k, v in GLOBAL["global"]["compare"].items() if k != "enabled"}
     want.update(mode="scaleout", passThrough={"nested": {"rate": 2.5, "names": ["a", "b"]}})
     assert {k: v for k, v in config.items() if k != "model"} == json.loads(json.dumps(want))
+
+
+def test_compare_scale_out_mode_gets_its_grace_period_and_node_list(render, compare):
+    # In mode scaleout a stop also takes down the router and the launch's second side pod, and check_plan lists the
+    # GPU nodes before the run changes anything; mode levels keeps its grace period and permissions.
+    sys.path.insert(0, str(REPO / "notebooks"))
+    from rhvp_compare import kube
+
+    items = docs(render / "charts/notebook-compare-scaleout.yaml")
+    pod = one(items, "Job")["spec"]["template"]["spec"]
+    assert pod["terminationGracePeriodSeconds"] == 420 and kube.stop_budget_seconds(2) < 420
+    assert one(items, "ClusterRole", "vllm-notebook-image-compare")["rules"][0] == {
+        "apiGroups": [""], "resources": ["nodes"], "verbs": ["get", "list"]}
+    levels = compare["notebook-compare"]
+    assert one(levels, "Job")["spec"]["template"]["spec"]["terminationGracePeriodSeconds"] == 300
+    assert one(levels, "ClusterRole", "vllm-notebook-image-compare")["rules"][0]["verbs"] == ["get"]
 
 
 def test_gpu_operator_namespace_is_scraped_by_cluster_monitoring(cg):

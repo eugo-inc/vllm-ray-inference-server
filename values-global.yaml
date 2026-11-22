@@ -70,9 +70,10 @@ global:
     # levels   - rounds of the two sides, each launch loaded at
     #            load.concurrencies (described above). The default.
     # scaleout - the scale-out benchmark (the commented example at the end of
-    #            this block). It runs with scripts/compare-local.sh (docker)
-    #            for now: the OpenShift Job refuses it (PLAN_INVALID) until
-    #            its scale round is built.
+    #            this block). It runs as this Job and with
+    #            scripts/compare-local.sh (docker). On OpenShift both replicas
+    #            of a side are pods on one GPU node, which sharedGpu below
+    #            chooses (README, "The benchmark's scale-out mode").
     mode: levels
     # Lower-case letters, digits, "-" or "."; at most 40 characters.
     runName: vllm-two-releases
@@ -187,9 +188,13 @@ global:
     #     stepAfterSeconds: 30
     #     ttftMs: 1000     # goal: time to first token, at most
     #     tpotMs: 100      # goal: inter-token latency, at most
-    #     # Both replicas of a side on one GPU. false: each on a GPU of its
-    #     # own, given with REPLICA_GPUS (scripts/compare-local.sh); a run
-    #     # whose REPLICA_GPUS does not match this setting is refused.
+    #     # Both replicas of a side on one GPU. On OpenShift that needs a
+    #     # node with one GPU offered as two time-sliced shares
+    #     # (timeSlicing in charts/all/nvidia-gpu-config/values.yaml).
+    #     # false: each on a GPU of its own: on OpenShift a node with two GPUs
+    #     # or more and no GPU sharing (no time-slicing, no MPS); with docker,
+    #     # given with REPLICA_GPUS (scripts/compare-local.sh). A run whose
+    #     # GPUs do not match this setting is refused before anything changes.
     #     sharedGpu: true
 
 main:

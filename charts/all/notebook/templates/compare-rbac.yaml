@@ -6,7 +6,8 @@
 # give GuideLLM the tokenizer of a gated model), writes its status ConfigMap in
 # this namespace, lists the runner pods here (one run at a time), reads the GPU
 # node's labels and the cluster version for the results' provenance, and reads GPU
-# power from the cluster's monitoring.
+# power from the cluster's monitoring. In mode scaleout it also lists the nodes,
+# and each scored launch adds a second side pod.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -139,6 +140,11 @@ rules:
       - nodes
     verbs:
       - get
+      {{- if eq (include "notebook.compareMode" .) "scaleout" }}
+      {{- /* mode scaleout: the runner lists the GPU nodes once, before anything changes, to check that one can
+             hold a side's two replicas as scaleOut.sharedGpu declares (kube.KubeBackend.check_plan). */}}
+      - list
+      {{- end }}
   - apiGroups:
       - config.openshift.io
     resources:
