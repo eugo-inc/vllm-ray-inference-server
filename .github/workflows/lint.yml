@@ -39,6 +39,9 @@ jobs:
           # aiohttp: the comparison's request router (notebooks/rhvp_compare/router.py), the same
           # release as in the pinned GuideLLM image; without it its server tests are skipped.
           python -m pip install yamllint pytest pyyaml jsonschema httpx aiohttp==3.14.3
+          # pairbench: the comparison's sign test, Holm's correction and fewest rounds (rhvp_compare/stats.py),
+          # pinned with its hashes, as the notebook image and scripts/compare-local.sh install it.
+          python -m pip install --no-deps --only-binary :all: --require-hashes -r notebooks/requirements-compare.lock
 
       - name: yamllint
         run: yamllint -d "$YAMLLINT_CONFIG" . values-secret.yaml.template
