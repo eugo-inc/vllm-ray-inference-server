@@ -183,8 +183,11 @@ def plain_family(m: int) -> str:
 
 def min_rounds(m: int, alpha: float = 0.05) -> int:
     """The fewest rounds with which any of m cases can get a verdict: the smallest n with m * 2^(1-n) < alpha, from
-    pairbench. An m below 1 counts as 1 here (pairbench refuses it). pairbench also refuses an alpha outside (0, 1);
-    the plan takes alpha from 0.0001 to 0.5 only."""
+    pairbench. An m below 1 counts as 1 here (pairbench refuses it). pairbench also refuses an alpha outside (0, 1)
+    with ValueError. The plan takes alpha from 0.0001 to 0.5 only, but `python -m rhvp_compare analyze` takes it from
+    the results file as it is (its schema allows any alpha above 0), so a file edited by hand to an alpha of 0 or less,
+    1 or more, or NaN stops the analysis here. The earlier code returned a number for 1 or more and for NaN, and never
+    returned for 0 or less. For every alpha between 0 and 1 the answers are the earlier code's."""
     return pairbench_stats.min_rounds(max(int(m), 1), alpha)
 
 

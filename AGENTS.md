@@ -357,9 +357,13 @@ and uses a serving certificate; the Route uses `reencrypt` termination.
   pairing, floor, rule and `analyse` are not used. There is no fallback: without pairbench, `rhvp_compare.stats` does
   not import. `tests/test_compare_stats.py` holds the three adapters to the pattern's earlier formulas on a grid of
   inputs and checks that they reach pairbench. Re-analyzing the repository's synthetic results and the results of 33
-  earlier runs of the runner with real servers (39 distinct files, kept outside the repository) with the earlier and
-  the new code gave byte-identical `results.json` and `results.md`, on Python 3.12 and 3.13, and so did every analysis
-  the unit tests make.
+  earlier runs of the runner with real servers (39 attempts, 6 of them a run started again after it ended partial;
+  kept outside the repository) with the earlier and the new code gave byte-identical `results.json` and `results.md`,
+  on Python 3.12 and 3.13, and so did every analysis the unit tests make. The one difference: `analyze` takes alpha
+  from the results file as it is, and a file edited by hand to an alpha of 1 or more, 0 or less, or NaN (the plan
+  takes 0.0001 to 0.5; the schema allows any alpha above 0) now stops `python -m rhvp_compare analyze` with a
+  ValueError from pairbench's `min_rounds`, where the earlier code gave an analysis for 1 or more and for NaN, and never
+  finished for 0 or less.
 - `notebooks/rhvp_compare/analyze.py` is the boundary to the statistics: `inputs(results)` turns `plan` and
   `launches` into plain rows (round, position, side, case, value), the twin map, the cases and the failed launches;
   `analyse(...)` turns those into `analysis` (`rule`, `comparisons`, `same_vs_same`, `nonpositive_twins`,

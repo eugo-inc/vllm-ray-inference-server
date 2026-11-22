@@ -589,10 +589,13 @@ Every outcome is in `analysis.comparisons[].outcome` (`better`, `worse`, `tie`, 
 from [pairbench](https://github.com/eugo-inc/pairbench) 0.1.0 (its `pairbench.stats` functions `sign_test`, `holm` and
 `min_rounds`), installed from PyPI with its hashes pinned in `notebooks/requirements-compare.lock`. The rest of the rule
 is this pattern's own code (`notebooks/rhvp_compare/stats.py` and `analyze.py`): the ratios and their median, the noise
-floors and the bar, the verdict table, the run-order check and the reasons for NO VERDICT. The three functions give the
-same values as the pattern's own code gave before them: re-analyzing recorded results with both gave byte-identical
-`results.json` and `results.md` files. The runs with real servers and on OpenShift described below came before
-pairbench was added, so their statistics were the pattern's own code throughout.
+floors and the bar, the verdict table, the run-order check and the reasons for NO VERDICT. On every results file the
+runner writes, the three functions give the same values as the pattern's own code gave before them: re-analyzing
+recorded results with both gave byte-identical `results.json` and `results.md` files. The one difference: a results
+file edited by hand to an alpha of 1 or more, 0 or less, or NaN (the plan takes 0.0001 to 0.5) now stops
+`python -m rhvp_compare analyze` with an error, where the earlier code gave an analysis for 1 or more and for NaN, and
+never finished for 0 or less. The runs with real servers and on OpenShift described below came before pairbench was
+added, so their statistics were the pattern's own code throughout.
 
 With n rounds no p-value can be smaller than 2^(1-n), and Holm multiplies the smallest one by the number of primary
 cases that got a p-value. A primary case with fewer than 2 rounds in which both sides have a figure above 0 gets no
