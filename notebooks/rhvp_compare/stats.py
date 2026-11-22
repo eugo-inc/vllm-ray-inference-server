@@ -1,5 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
-"""The statistics of an image comparison: pure functions on numbers, standard library only.
+"""The statistics of an image comparison: pure functions on numbers.
+
+Three of them come from pairbench (https://pypi.org/project/pairbench/, the version pinned in
+notebooks/requirements-compare.lock), through thin adapters that keep this module's names, arguments and results:
+`sign_test` (the exact two-sided sign test), `holm` (Holm's correction) and `min_rounds` (the fewest rounds). Their
+values are the same as this module's own code gave before (tests/test_compare_stats.py checks a grid of inputs
+against the formulas). There is no fallback: without pairbench this module does not import. Everything else here is
+this pattern's own, standard library only: the median and quantiles, the signs of the ratios, the noise floor, the
+verdict table (`grade`), the run-order check, `max_cases`, `must_agree` (on top of `sign_test`) and the words.
 
 Nothing here knows about the results file, a server or a cluster. analyze.py turns the results file into the paired
 values these functions take, and their answers back into the file's `analysis` section, so this module and
@@ -31,6 +39,8 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
+
+import pairbench.stats as pairbench_stats
 
 LOWER, HIGHER = "lower", "higher"
 #: Kinds of case: time-like cases use FASTER / SLOWER, the others BETTER / WORSE.
@@ -142,14 +152,11 @@ class SignTest:
 
 
 def sign_test(n_lower: int, n_higher: int) -> SignTest:
-    """k = min(n_lower, n_higher); p = min(1, 2 * sum(C(n, i) for i <= k) / 2^n). Integers until the one division."""
-    n = n_lower + n_higher
-    if n == 0:
-        return SignTest(0, 0, 1.0, (1, 1))
-    tail = sum(math.comb(n, i) for i in range(min(n_lower, n_higher) + 1))
-    whole = 1 << n
-    top = min(2 * tail, whole)
-    return SignTest(n_lower, n_higher, top / whole, (top, whole))
+    """pairbench's exact sign test: k = min(n_lower, n_higher); p = min(1, 2 * sum(C(n, i) for i <= k) / 2^n), in
+    integers until the one division, and the fraction (min(2 * tail, 2^n), 2^n); no untied pair gives 1.0 as (1, 1).
+    pairbench refuses a count that is not a whole number of 0 or more (ValueError); signs() never gives one."""
+    test = pairbench_stats.sign_test(n_lower, n_higher)
+    return SignTest(test.n_lower, test.n_higher, test.p, test.fraction)
 
 
 def signs(ratios: Sequence[float]) -> tuple[int, int]:
@@ -160,14 +167,12 @@ def signs(ratios: Sequence[float]) -> tuple[int, int]:
 # ---- correction for testing several cases ----
 
 def holm(pvalues: Mapping[str, float]) -> dict[str, float]:
-    """Holm's adjusted p-values by key: sorted ascending (ties by key), adj[i] = max(adj[i-1], min(1, (m-i) p[i]))."""
-    order = sorted(pvalues, key=lambda key: (pvalues[key], key))
-    m = len(order)
-    out, running = {}, 0.0
-    for i, key in enumerate(order):
-        running = max(running, min(1.0, (m - i) * pvalues[key]))
-        out[key] = running
-    return out
+    """Holm's adjusted p-values by key, from pairbench: sorted ascending (ties by key), adj[i] = max(adj[i-1], min(1,
+    (m-i) p[i])). pairbench takes a list and breaks ties by position, so the values go in by key, which makes its tie
+    order the key order; the result is keyed again in that sorted order (ascending p, ties by key)."""
+    keys = sorted(pvalues)
+    by_key = dict(zip(keys, pairbench_stats.holm([pvalues[key] for key in keys]), strict=True))
+    return {key: by_key[key] for key in sorted(pvalues, key=lambda key: (pvalues[key], key))}
 
 
 def plain_family(m: int) -> str:
@@ -177,12 +182,10 @@ def plain_family(m: int) -> str:
 
 
 def min_rounds(m: int, alpha: float = 0.05) -> int:
-    """The fewest rounds with which any of m cases can get a verdict: the smallest n with m * 2^(1-n) < alpha."""
-    m = max(int(m), 1)
-    n = 1
-    while m * 2.0 ** (1 - n) >= alpha:
-        n += 1
-    return n
+    """The fewest rounds with which any of m cases can get a verdict: the smallest n with m * 2^(1-n) < alpha, from
+    pairbench. An m below 1 counts as 1 here (pairbench refuses it). pairbench also refuses an alpha outside (0, 1);
+    the plan takes alpha from 0.0001 to 0.5 only."""
+    return pairbench_stats.min_rounds(max(int(m), 1), alpha)
 
 
 def max_cases(n: int, alpha: float = 0.05) -> int:

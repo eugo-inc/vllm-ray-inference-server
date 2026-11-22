@@ -4,7 +4,8 @@ launch. The plan is written into the results file before any measurement, so the
 and the order of every launch are on record as declared, not chosen after the fact.
 
 The config file is JSON with the keys of `global.compare` in values-global.yaml (camelCase), plus `model` (from
-`global.model`) and a few platform settings the chart adds. Standard library only.
+`global.model`) and a few platform settings the chart adds. Standard library only, apart from pairbench
+through stats.py.
 
 Words. A launch is one start of one side: start its server, time the start, load it, take it down (in mode
 scaleout a scored launch also starts a second replica of the side under load). A round runs every entry of the lineup

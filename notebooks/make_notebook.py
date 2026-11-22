@@ -10,7 +10,8 @@ The notebooks' cells come from rhvp_bench/showing.py and rhvp_compare/cells.py; 
 nbformat 4.5 JSON, every cell
 with a stable id, every code cell with no outputs and `execution_count: null`, in the layout Jupyter itself saves
 (sorted keys, one-space indent, source split into lines). Every file it writes is therefore a pure function of the
-code in this folder. Never edit an .ipynb by hand. Standard library only.
+code in this folder. Never edit an .ipynb by hand. Standard library only, apart from pairbench
+(requirements-compare.lock), which the comparison's synthetic results reach through rhvp_compare/stats.py.
 """
 
 import argparse

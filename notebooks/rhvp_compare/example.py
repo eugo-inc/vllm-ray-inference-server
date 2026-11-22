@@ -4,7 +4,8 @@ fixed seed, never measured, and flagged as such (`run.synthetic: true`, the made
 
 make_notebook.py writes it to compare-recordings/synthetic.json and checks it with --check, like the timing
 notebook's synthetic recording. `synthesize_scale_out()` makes a run in mode scaleout the same way, for the tests of
-the notebook's scale-out section; nothing writes it to the repository. Standard library only.
+the notebook's scale-out section; nothing writes it to the repository. Standard library only, apart from
+pairbench through stats.py.
 """
 
 from __future__ import annotations

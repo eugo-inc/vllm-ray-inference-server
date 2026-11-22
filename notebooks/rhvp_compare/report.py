@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
-"""The short markdown table written next to each results file (results.md). Standard library only."""
+"""The short markdown table written next to each results file (results.md). Standard library only, apart from
+pairbench through stats.py."""
 
 from __future__ import annotations
 

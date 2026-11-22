@@ -10,7 +10,7 @@ This is the boundary a replacement tool plugs into, in two steps:
    twin comparisons, the rule and its family. It reads nothing else.
 
 Anything that takes the same rows and returns an `analysis` of the same shape can replace this module and stats.py
-together. Standard library only.
+together. Standard library only, apart from pairbench through stats.py.
 
 Two checks this pattern adds to the rule, because a failed launch does not stop a run here:
 

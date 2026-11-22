@@ -8,5 +8,6 @@
 - replay: REPLAY mode, a stand-in server that streams a recorded run
 - prompts: the seeded prompt set (prompts.jsonl)
 
-Importing the package imports none of them, so make_notebook.py runs with the standard library alone.
+Importing the package imports none of them, so make_notebook.py needs none of their packages (it needs pairbench
+only, for the comparison's synthetic results).
 """

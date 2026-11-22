@@ -19,7 +19,8 @@ Modules:
 - energy: GPU power (DCGM through the cluster's monitoring, or nvidia-smi) and tokens per joule
 - analyze: the verdicts, from the launches in a results file (the adapter boundary: rows of round, position, side,
   case and value, plus which side is whose twin, in; the analysis out)
-- stats: the sign test, Holm's correction, the noise floor and the verdict rule; standard library only
+- stats: the sign test, Holm's correction, the noise floor and the verdict rule; the sign test, Holm's correction and
+  the fewest rounds from pairbench, the rest standard library only
 - report: the short markdown table
 - show, words: the comparison notebook's display and its fixed texts
 
