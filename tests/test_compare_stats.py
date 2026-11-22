@@ -1,19 +1,130 @@
 # SPDX-License-Identifier: Apache-2.0
 """rhvp_compare.stats and analyze.analyse: the sign test, Holm's correction, the fewest rounds, the run order, the
-noise floor from the twins and the verdict table, each against answers written here as constants.
+noise floor from the twins and the verdict table, each against answers written here as constants. The sign test,
+Holm's correction and the fewest rounds come from pairbench; the tests below also hold them to the formulas this
+module used before, on a grid of inputs, and check that they really come from pairbench.
 
-Run with: python -m pytest -q tests/test_compare_stats.py
+Needs pairbench (notebooks/requirements-compare.lock). Run with: python -m pytest -q tests/test_compare_stats.py
 """
 
+import importlib
+import importlib.metadata
+import math
 import random
+import re
+import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "notebooks"))
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "notebooks"))
 
 from rhvp_compare import analyze, plan as plans, stats  # noqa: E402
+
+
+# ---- what comes from pairbench ----
+
+def _pinned(lock: str) -> tuple[str, list[str]]:
+    """pairbench's version and hashes in a lock file of notebooks/."""
+    text = (ROOT / "notebooks" / lock).read_text()
+    found = re.search(r"^pairbench==(\S+) \\\n((?:    --hash=sha256:[0-9a-f]{64}(?: \\)?\n)+)", text, re.M)
+    assert found, f"no pairbench pin in notebooks/{lock}"
+    return found.group(1), re.findall(r"sha256:([0-9a-f]{64})", found.group(2))
+
+
+def test_pairbench_is_pinned_the_same_in_both_locks_and_installed_at_that_version():
+    """The notebook image installs requirements.lock, scripts/compare-local.sh and CI requirements-compare.lock: the
+    same version and hashes in both, and that version is the one these tests run with."""
+    version, hashes = _pinned("requirements-compare.lock")
+    assert _pinned("requirements.lock") == (version, hashes) and hashes
+    assert importlib.metadata.version("pairbench") == version
+
+
+def test_the_three_functions_call_pairbench():
+    """Each adapter hands its work to pairbench.stats: replace pairbench's function and the adapter's answer follows."""
+    pairbench_stats = importlib.import_module("pairbench.stats")
+    assert stats.pairbench_stats is pairbench_stats
+    calls = []
+
+    def recording(name):
+        real = getattr(pairbench_stats, name)
+
+        def call(*args):
+            calls.append(name)
+            return real(*args)
+        return call
+    with pytest.MonkeyPatch.context() as patch:
+        for name in ("sign_test", "holm", "min_rounds"):
+            patch.setattr(pairbench_stats, name, recording(name))
+        assert stats.sign_test(10, 2).fraction == (158, 4096)
+        assert stats.holm({"a": 0.01, "b": 0.04}) == {"a": 0.02, "b": 0.04}
+        assert stats.min_rounds(4) == 8
+        assert stats.must_agree(8, 4) == 8
+    assert calls[:3] == ["sign_test", "holm", "min_rounds"] and set(calls[3:]) == {"sign_test"}
+
+
+def test_without_pairbench_the_statistics_do_not_import():
+    """No fallback: with pairbench blocked, importing rhvp_compare.stats fails instead of using other code."""
+    code = ("import sys; sys.modules['pairbench'] = None; sys.modules['pairbench.stats'] = None\n"
+            "try:\n    import rhvp_compare.stats\nexcept ImportError:\n    print('refused')\n"
+            "else:\n    print('imported')\n")
+    done = subprocess.run([sys.executable, "-c", code], cwd=ROOT / "notebooks", capture_output=True, text=True,
+                          timeout=60, check=True)
+    assert done.stdout.strip() == "refused"
+    source = (ROOT / "notebooks/rhvp_compare/stats.py").read_text()
+    assert "ImportError" not in source and "import pairbench.stats as pairbench_stats\n" in source
+
+
+def _sign_test_before(n_lower, n_higher):
+    """The pattern's own sign test before pairbench: (p, fraction)."""
+    n = n_lower + n_higher
+    if n == 0:
+        return 1.0, (1, 1)
+    tail = sum(math.comb(n, i) for i in range(min(n_lower, n_higher) + 1))
+    whole = 1 << n
+    top = min(2 * tail, whole)
+    return top / whole, (top, whole)
+
+
+def _holm_before(pvalues):
+    order = sorted(pvalues, key=lambda key: (pvalues[key], key))
+    out, running = {}, 0.0
+    for i, key in enumerate(order):
+        running = max(running, min(1.0, (len(order) - i) * pvalues[key]))
+        out[key] = running
+    return out
+
+
+def _min_rounds_before(m, alpha):
+    m, n = max(int(m), 1), 1
+    while m * 2.0 ** (1 - n) >= alpha:
+        n += 1
+    return n
+
+
+def test_the_adapters_give_what_the_pattern_gave_before_on_a_grid():
+    """Exactly equal (the same floats, the same fractions, the same key order) to the formulas this module used before
+    pairbench: every sign test up to 80 against 80, Holm on mappings with tied p-values and tied keys' order, and the
+    fewest rounds for 0 to 300 cases at the alphas a plan may declare."""
+    for lower in range(81):
+        for higher in range(81):
+            test = stats.sign_test(lower, higher)
+            assert (test.p, test.fraction) == _sign_test_before(lower, higher)
+            assert (test.n_lower, test.n_higher, test.n) == (lower, higher, lower + higher)
+            assert type(test) is stats.SignTest
+    rng = random.Random(7)
+    tied = [stats.sign_test(lo, hi).p for lo in range(12) for hi in range(12)]
+    for trial in range(3000):
+        keys = rng.sample([f"c{i}/case" for i in range(30)], rng.randrange(0, 12))
+        draw = (lambda: rng.choice(tied)) if trial % 2 else rng.random
+        pvalues = {key: draw() for key in keys}
+        got, before = stats.holm(pvalues), _holm_before(pvalues)
+        assert list(got.items()) == list(before.items())
+    for alpha in (0.0001, 0.001, 0.01, 0.05, 0.1, 0.5):
+        for m in range(-2, 301):
+            assert stats.min_rounds(m, alpha) == _min_rounds_before(m, alpha)
 
 
 # ---- the sign test ----

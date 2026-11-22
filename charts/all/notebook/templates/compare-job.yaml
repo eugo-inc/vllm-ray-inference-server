@@ -25,6 +25,9 @@ spec:
               app.kubernetes.io/name: notebook
           topologyKey: kubernetes.io/hostname
   initContainers:
+    # The runner's code, and pairbench as the notebook image installed it from notebooks/requirements.lock (the
+    # comparison's sign test, Holm's correction and fewest rounds; pure Python, so the GuideLLM image's own Python
+    # runs it). The dist-info folder carries pairbench's version, license and notice.
     - name: copy-runner
       image: {{ include "notebook.image" . | quote }}
       imagePullPolicy: {{ .Values.image.pullPolicy }}
@@ -32,6 +35,8 @@ spec:
         - cp
         - -R
         - /opt/app-root/notebooks/rhvp_compare
+        - /opt/app-root/lib/python3.12/site-packages/pairbench
+        - /opt/app-root/lib/python3.12/site-packages/pairbench-0.1.0.dist-info
         - /runner/
       securityContext:
         allowPrivilegeEscalation: false
@@ -168,7 +173,7 @@ spec:
 # message and the log's last lines summarise it.
 #
 # The container is the pinned GuideLLM image; an init container copies the
-# rhvp_compare package into it from the notebook image. The PVC is ReadWriteOnce
+# rhvp_compare package and pairbench into it from the notebook image. The PVC is ReadWriteOnce
 # and the notebook mounts it too, so the pod runs on the notebook pod's node.
 apiVersion: batch/v1
 kind: Job

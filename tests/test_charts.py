@@ -199,7 +199,11 @@ def test_compare_job(compare):
                         "topologyKey": "kubernetes.io/hostname"}
     [copy] = pod["initContainers"]
     assert copy["image"] == "image-registry.openshift-image-registry.svc:5000/vllm-notebook/notebook:latest"
-    assert copy["command"] == ["cp", "-R", "/opt/app-root/notebooks/rhvp_compare", "/runner/"]
+    site = "/opt/app-root/lib/python3.12/site-packages"  # the notebook image's (ubi9/python-312) virtualenv
+    pinned = re.search(r"^pairbench==(\S+) ", (REPO / "notebooks/requirements.lock").read_text(), re.M).group(1)
+    assert copy["command"] == ["cp", "-R", "/opt/app-root/notebooks/rhvp_compare", f"{site}/pairbench",
+                               f"{site}/pairbench-{pinned}.dist-info", "/runner/"]
+    assert "ubi9/python-312@" in (REPO / "notebooks/Containerfile").read_text()
     [runner] = pod["containers"]
     assert runner["image"].startswith("ghcr.io/vllm-project/guidellm:v0.8.1@sha256:")
     assert runner["command"] == ["python", "-m", "rhvp_compare", "run", "--backend", "kube", "--config",

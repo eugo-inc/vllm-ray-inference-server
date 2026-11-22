@@ -10,7 +10,10 @@ Secrets for an optional Hugging Face token. It adds a small JupyterLab whose not
 
 Eugo, which maintains this pattern, runs an HPC platform that rebuilds open-source native and Python packages,
 PyTorch and vLLM among them, from source. This pattern does not use it: it installs stock packages only. More at
-[eugo.io](https://eugo.io/).
+[eugo.io](https://eugo.io/). One of those stock packages is Eugo's own: the image comparison takes its sign test,
+Holm's correction and fewest rounds from [pairbench](https://github.com/eugo-inc/pairbench), Eugo's open-source
+benchmarking tool (Apache-2.0), installed unmodified from PyPI into the notebook image and the comparison's runner; the
+server image has none of it.
 
 **The problem it solves.** This pattern does not replace Red Hat's AI products, such as Red Hat OpenShift AI, and it
 does not plug into them. It is a small, community-maintained reference point: stock vLLM on Ray Serve, built from
@@ -426,8 +429,12 @@ oc annotate scaledobject/ray-serve-llm -n vllm-inference autoscaling.keda.sh/pau
 
 ### Run a comparison
 
-1. Wait until the first install has finished and the notebook image has been built: the runner takes its code from
-   that image. With `image.override` on the notebook chart, your image must contain `notebooks/rhvp_compare`.
+1. Wait until the first install has finished and the notebook image has been built: the runner takes its code, and
+   pairbench (the comparison's sign test, Holm's correction and fewest rounds), from that image. A notebook image
+   built before pairbench was added makes the Job fail at its start; rebuild it first
+   (`oc start-build notebook -n vllm-notebook --follow`). With `image.override` on the notebook chart, your image
+   must contain `notebooks/rhvp_compare` at `/opt/app-root/notebooks/rhvp_compare`, and the pinned pairbench, with
+   its `dist-info` folder, in `/opt/app-root/lib/python3.12/site-packages`.
 2. In `values-global.yaml`, under `global.compare`:
    - set `enabled: true`;
    - set the two `sides`: a `name`, an `image` (pin it by digest), and a `preset`: `vllm-openai` for an upstream
@@ -578,6 +585,18 @@ The rule is fixed before the first launch and written into the results (`plan.an
 Every outcome is in `analysis.comparisons[].outcome` (`better`, `worse`, `tie`, `unresolved`, `no_verdict`), with
 `reason` and the display word in `verdict`.
 
+**Where the statistics come from.** The exact sign test, Holm's correction and the fewest rounds a verdict needs come
+from [pairbench](https://github.com/eugo-inc/pairbench) 0.1.0 (its `pairbench.stats` functions `sign_test`, `holm` and
+`min_rounds`), installed from PyPI with its hashes pinned in `notebooks/requirements-compare.lock`. The rest of the rule
+is this pattern's own code (`notebooks/rhvp_compare/stats.py` and `analyze.py`): the ratios and their median, the noise
+floors and the bar, the verdict table, the run-order check and the reasons for NO VERDICT. On every results file the
+runner writes, the three functions give the same values as the pattern's own code gave before them: re-analyzing
+recorded results with both gave byte-identical `results.json` and `results.md` files. The one difference: a results
+file edited by hand to an alpha of 1 or more, 0 or less, or NaN (the plan takes 0.0001 to 0.5) now stops
+`python -m rhvp_compare analyze` with an error, where the earlier code gave an analysis for 1 or more and for NaN, and
+never finished for 0 or less. The runs with real servers and on OpenShift described below came before pairbench was
+added, so their statistics were the pattern's own code throughout.
+
 With n rounds no p-value can be smaller than 2^(1-n), and Holm multiplies the smallest one by the number of primary
 cases that got a p-value. A primary case with fewer than 2 rounds in which both sides have a figure above 0 gets no
 p-value (and NO VERDICT) and leaves that count, so the other primary cases are corrected for fewer cases; the report and
@@ -652,6 +671,12 @@ message.
 docker on one machine with an NVIDIA GPU, with GPU power sampled by `nvidia-smi` instead of DCGM.
 `tests/fixtures/compare-local-mock.json` is a small config that needs no GPU: two GuideLLM mock servers.
 
+- pairbench, which the GuideLLM image the runner runs in does not have, is installed for each run from
+  `notebooks/requirements-compare.lock`: pip, in a throwaway container of that image, downloads it from PyPI, checks
+  its hash and installs it, alone, into a temporary folder that the runner mounts read-only. So the machine needs
+  access to PyPI, or to a mirror or proxy: `PIP_INDEX_URL`, `PIP_EXTRA_INDEX_URL`, `PIP_TRUSTED_HOST` and the proxy
+  variables (`HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY`, upper or lower case), where set, are passed into that
+  container. A failed install stops the script with exit 3 before the runner starts, after pip's own message.
 - `SIDE_MEMORY` (for example `32g`) and `RUNNER_MEMORY` (default `8g`) limit the containers' memory. On a GPU whose
   memory is the machine's own, also lower `server.gpuMemoryUtilization` in the config: it is a share of all of it.
 - The runner container may hold 65536 open files (`--ulimit nofile=65536:65536`, soft and hard; docker's default soft
@@ -791,8 +816,8 @@ per second, over the whole level, is not timed per token.
   - Mode `levels` again, upstream vLLM v0.32.0 and v0.33.0, 1 round without twins or warm-up, 30 s at each of 1, 4,
     8, 16, 32 and 64 concurrent streams, with DCGM energy figures: the levels run behind the surge rate of the next run
     ("Picking the surge rate"). It took 21 minutes.
-  - Mode `scaleout`, with the code described here, upstream vLLM v0.32.0 and v0.33.0 ("The benchmark's scale-out
-    mode").
+  - Mode `scaleout`, with the code described here apart from the statistics (the pattern's own, from before pairbench
+    was added), upstream vLLM v0.32.0 and v0.33.0 ("The benchmark's scale-out mode").
 
   Not run on OpenShift: twins, the default settings and the length of a run with them, a run that ends partial or is
   stopped (the stop path and the early restore on a stop), the refusal of a second run, keda mode during a run (the
@@ -1215,9 +1240,10 @@ and twin and gets NO VERDICT (`zero_floor`): the run checks the harness, not a r
   proven. If the name or its labels differ in another release, the query answers nothing, KEDA reads that as 0, and
   the server never scales.
 - `compileCache.mode` `node` and `shared` have not run on OpenShift.
-- The benchmark's mode has run once on OpenShift, in its current version, on a throwaway cluster on AWS (OpenShift
-  4.22.18) whose g6.2xlarge node offered its NVIDIA L4 as two time-sliced shares (`nvidia.com/gpu` allocatable 2, with
-  GPU feature discovery's labels `nvidia.com/gpu.count` 1 and `nvidia.com/gpu.replicas` 2). Upstream vLLM v0.32.0
+- The benchmark's mode has run once on OpenShift, in its current version apart from the statistics (the pattern's own,
+  from before pairbench was added), on a throwaway cluster on AWS (OpenShift 4.22.18) whose g6.2xlarge node offered
+  its NVIDIA L4 as two time-sliced shares (`nvidia.com/gpu` allocatable 2, with GPU feature discovery's labels
+  `nvidia.com/gpu.count` 1 and `nvidia.com/gpu.replicas` 2). Upstream vLLM v0.32.0
   (A) and v0.33.0 (B), preset `vllm-openai`, `sharedGpu: true`, 2 rounds without twins or a warm-up; 256 prompt and
   128 output tokens per request, 53.8 requests per second for 420 seconds through the router, the second replica asked
   for 30 seconds after the first request, and goals of 1000 ms to the first token and 100 ms between tokens. All 4

@@ -9,3 +9,5 @@ jupyterlab==4.6.4
 ipykernel==7.4.0
 nbformat==5.11.1
 httpx==0.28.1
+# The image comparison's own packages (pairbench), which scripts/compare-local.sh and CI also install alone.
+-r requirements-compare.in

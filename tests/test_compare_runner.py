@@ -1232,8 +1232,9 @@ def test_compare_local_passes_on_settings_the_docker_backend_reads():
 
 def _run_compare_local(tmp_path: Path, **settings: str) -> tuple[subprocess.CompletedProcess, list[list[str]], str]:
     """Runs the real scripts/compare-local.sh with a fake `docker` first on PATH that records each call's arguments and
-    exits 0, and a Unix socket as DOCKER_SOCKET, so nothing reaches a docker daemon. The socket sits in a short
-    folder of its own, since a Unix socket's path may hold at most 107 bytes and tmp_path can be longer. The script
+    exits 0 (1 for a call with the argument DOCKER_STUB_FAIL, when that setting is given), and a Unix socket as
+    DOCKER_SOCKET, so nothing reaches a docker daemon. The socket sits in a short folder of its own, since a Unix
+    socket's path may hold at most 107 bytes and tmp_path can be longer. The script
     gets only PATH, HOME, the socket, the record file and the given settings, so none of the caller's own settings
     leak in. Returns the finished process, the recorded calls and the socket's path."""
     stub_dir, log = tmp_path / "bin", tmp_path / "docker-calls.jsonl"
@@ -1241,7 +1242,8 @@ def _run_compare_local(tmp_path: Path, **settings: str) -> tuple[subprocess.Comp
     stub = stub_dir / "docker"
     stub.write_text(f"#!{sys.executable}\nimport json, os, sys\n"
                     "with open(os.environ['DOCKER_STUB_LOG'], 'a') as f:\n"
-                    "    f.write(json.dumps(sys.argv[1:]) + '\\n')\n")
+                    "    f.write(json.dumps(sys.argv[1:]) + '\\n')\n"
+                    "sys.exit(1 if os.environ.get('DOCKER_STUB_FAIL', '\\0') in sys.argv else 0)\n")
     stub.chmod(0o755)
     with tempfile.TemporaryDirectory(prefix="rhvp-") as short, socket.socket(socket.AF_UNIX) as listener:
         sock = os.path.join(short, "d.sock")
@@ -1292,6 +1294,39 @@ def test_compare_local_refuses_an_open_file_limit_that_is_not_a_whole_number(tmp
     assert done.returncode == 2
     assert "RUNNER_OPEN_FILES" in done.stderr
     assert calls == []
+
+
+@needs_compare_local
+def test_compare_local_installs_pairbench_hash_checked_before_the_runner(tmp_path):
+    """pairbench is not in the GuideLLM image: the script installs it from notebooks/requirements-compare.lock in a
+    throwaway container of that image (hashes required, no other package, no GPU), into a temporary folder that the
+    runner then mounts read-only and puts on its PYTHONPATH; the folder is removed when the script ends."""
+    done, calls, _ = _run_compare_local(tmp_path, TMPDIR=str(tmp_path))
+    assert done.returncode == 0, done.stderr
+    runs = [call for call in calls if call[0] == "run"]
+    assert len(runs) == 2 and "rhvp-compare.runner=1" in runs[1], calls
+    install, runner = runs
+    lock = f"{ROOT}/notebooks/requirements-compare.lock:/requirements-compare.lock:ro"
+    assert lock in install and "NVIDIA_VISIBLE_DEVICES=void" in install
+    image_at = install.index("--entrypoint") + 2
+    assert install[image_at - 1:image_at + 1] == ["python", plans.GUIDELLM_IMAGE]
+    assert install[image_at + 1:] == ["-m", "pip", "install", "--disable-pip-version-check", "--no-cache-dir",
+                                      "--no-deps", "--only-binary", ":all:", "--require-hashes", "--target", "/deps",
+                                      "-r", "/requirements-compare.lock"]
+    [deps] = [arg[:-len(":/deps")] for arg in install if arg.endswith(":/deps")]
+    assert deps.startswith(f"{tmp_path}/rhvp-compare-pairbench.") and not Path(deps).exists()
+    assert f"{deps}:/runner-deps:ro" in runner and "PYTHONPATH=/runner:/runner-deps" in runner
+
+
+@needs_compare_local
+def test_compare_local_stops_with_exit_3_when_pairbench_cannot_be_installed(tmp_path):
+    """No PyPI, a changed file or a wrong hash: the install fails, the script says so and exits 3, and the runner is
+    never started."""
+    done, calls, _ = _run_compare_local(tmp_path, TMPDIR=str(tmp_path), DOCKER_STUB_FAIL="--require-hashes")
+    assert done.returncode == 3
+    assert "could not install pairbench" in done.stderr
+    assert not [call for call in calls if "rhvp-compare.runner=1" in call]
+    assert not list(tmp_path.glob("rhvp-compare-pairbench.*"))
 
 
 def _main(tmp_path, backend, monkeypatch, **extra) -> tuple[int, Path, Path]:
