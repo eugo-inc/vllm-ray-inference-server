@@ -258,7 +258,8 @@ namespaces. A few commands in this README and in AGENTS.md use `nvidia-gpu-opera
 OpenShift guide uses; use yours.
 
 Any value other than `install` or `reuse`, or none, installs neither operator, and the server's app fails to render
-with a message that names the setting; `scripts/validate-values.sh` refuses it too. Switching a running install is
+with a message that names the setting; `scripts/validate-values.sh` refuses it too (a missing value with its own
+message, which also names `global.gpuOperators`). Switching a running install is
 not supported, and neither switch has been tried on a cluster. From `install` to `reuse` removes nothing, because
 the apps sync without pruning: the pattern's operator Namespaces, OperatorGroups and Subscriptions stay but are no
 longer updated, and its `nfd-config` and `nvidia-gpu-config` apps stay and keep applying its NodeFeatureDiscovery and

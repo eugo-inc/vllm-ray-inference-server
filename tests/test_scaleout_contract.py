@@ -311,7 +311,18 @@ def test_gpu_operator_check_runs_in_validate_values(tmp_path):
     assert "GPU operator settings, AWS: global.gpuOperators must be install or reuse; got Reuse" in proc.stderr
 
 
-TIME_SLICING_ON = ("charts/all/nvidia-gpu-config/values.yaml", "timeSlicing:\n  enabled: false\n",
+def test_missing_gpu_operators_stops_validate_values(tmp_path):
+    """A fork that drops global.gpuOperators would install neither GPU operator. validate-values.sh stops before its
+    GPU operator check, when it fills in the sharedValueFiles entry that needs the value, with a message of its own
+    that names the setting."""
+    proc = validate_values(tmp_path, "values-global.yaml", "  gpuOperators: install\n", "")
+    assert proc.returncode == 1
+    assert ("sharedValueFiles entry '/overrides/values-gpu-operators-{{ $.Values.global.gpuOperators }}.yaml' needs "
+            "global.gpuOperators, which is not set") in proc.stderr
+    assert "GPU operator settings" not in proc.stdout + proc.stderr
+
+
+TIME_SLICING_ON =("charts/all/nvidia-gpu-config/values.yaml", "timeSlicing:\n  enabled: false\n",
                    "timeSlicing:\n  enabled: true\n")
 
 

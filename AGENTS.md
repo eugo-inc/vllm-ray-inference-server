@@ -690,8 +690,10 @@ purpose: a misspelled or missing value then installs nothing, instead of a secon
 cluster's (a second OperatorGroup in their namespace, and their Subscription and NodeFeatureDiscovery written over
 where the names match the pattern's). The server chart, which always renders, refuses any value other than `install`
 or `reuse`, and a missing one (`_settings.tpl`; no default in its `values.yaml`, which would hide a missing key);
-`scripts/pattern_settings.py` (`check_gpu_config`, through `scripts/validate-values.sh`) refuses the same with the
-same message. With `reuse` in `values-global.yaml` it also refuses `timeSlicing.enabled`, as does the GPU chart's
+`scripts/pattern_settings.py` (`check_gpu_config`, through `scripts/validate-values.sh`) refuses another value with
+the same message. A missing one stops `validate-values.sh` before that, with its own message naming
+`global.gpuOperators` (its `sharedValueFiles` entry needs the value). With `reuse` in `values-global.yaml`,
+`check_gpu_config` also refuses `timeSlicing.enabled`, as does the GPU chart's
 own render (`templates/time-slicing-config.yaml`); the two cases `validate-values.sh` adds with the other value
 (`reuse` when `values-global.yaml` says `install`) leave time-slicing out, since with `install` it is the way to fit
 two server pods on one GPU. The cluster renders no app for that chart with `reuse`, so on the cluster the
