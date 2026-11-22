@@ -1232,8 +1232,9 @@ def test_compare_local_passes_on_settings_the_docker_backend_reads():
 
 def _run_compare_local(tmp_path: Path, **settings: str) -> tuple[subprocess.CompletedProcess, list[list[str]], str]:
     """Runs the real scripts/compare-local.sh with a fake `docker` first on PATH that records each call's arguments and
-    exits 0 (1 for a call with the argument DOCKER_STUB_FAIL, when that setting is given), and a Unix socket as DOCKER_SOCKET, so nothing reaches a docker daemon. The socket sits in a short
-    folder of its own, since a Unix socket's path may hold at most 107 bytes and tmp_path can be longer. The script
+    exits 0 (1 for a call with the argument DOCKER_STUB_FAIL, when that setting is given), and a Unix socket as
+    DOCKER_SOCKET, so nothing reaches a docker daemon. The socket sits in a short folder of its own, since a Unix
+    socket's path may hold at most 107 bytes and tmp_path can be longer. The script
     gets only PATH, HOME, the socket, the record file and the given settings, so none of the caller's own settings
     leak in. Returns the finished process, the recorded calls and the socket's path."""
     stub_dir, log = tmp_path / "bin", tmp_path / "docker-calls.jsonl"

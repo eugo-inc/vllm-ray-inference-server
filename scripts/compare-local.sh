@@ -19,9 +19,9 @@
 #      script ends. No other package is installed. A failed install stops the script with exit 3 before the runner
 #      starts.
 #   3. Runs the runner (notebooks/rhvp_compare, and that folder, both mounted read-only) in a container of the
-#      GuideLLM image on that network, with the docker socket mounted. The runner starts each side and the nvidia-smi sampler as sibling
-#      containers on the same network, one launch at a time, and runs GuideLLM as its own child process, as the
-#      OpenShift Job does.
+#      GuideLLM image on that network, with the docker socket mounted. The runner starts each side and the nvidia-smi
+#      sampler as sibling containers on the same network, one launch at a time, and runs GuideLLM as its own child
+#      process, as the OpenShift Job does.
 #   4. Prints where results.json and results.md are. The exit code is the runner's: 0 when every launch finished,
 #      1 for a partial run, 2 for a config that cannot run, 3 for a run that failed outside a launch (or pairbench
 #      that could not be installed, step 2), 4 when the server container (SERVER_CONTAINER) could not be started
