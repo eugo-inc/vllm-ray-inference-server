@@ -396,7 +396,8 @@ back to check.
 
 With the default settings a run is 8 rounds of 4 server starts, plus one warm-up start per side: 34 server starts.
 Each measured start is followed by three 60-second load levels, the power read and the teardown. We estimate about
-4 to 6 hours on one GPU (16 rounds: 66 starts, about 8 to 12 hours), but we have not timed a run on a cluster.
+4 to 6 hours on one GPU (16 rounds: 66 starts, about 8 to 12 hours), but no run with these settings has been timed on
+a cluster; the shorter runs on OpenShift are in "What has not been checked".
 
 The `ray-serve-llm` app ignores the Deployment's `replicas` on every install, also when the comparison is off: a sync
 never changes the server's replica count. That keeps a sync during a run from bringing the server back early, and
@@ -454,8 +455,9 @@ oc annotate scaledobject/ray-serve-llm -n vllm-inference autoscaling.keda.sh/pau
      options, not vLLM's, and `--help` lists these rules;
    - check `runName`, `rounds` (`count`, `warmup`, `twins`), `load` and `analysis` (`alpha`, `primary`). The
      comments there explain each setting.
-3. Commit and push. Argo CD creates the Job `compare-<runName>-<hash>` in `vllm-notebook`. We expect the `notebook`
-   app to show Progressing while the Job runs; this has not been tried on a cluster.
+3. Commit and push. Argo CD creates the Job `compare-<runName>-<hash>` in `vllm-notebook`. On OpenShift the
+   `notebook` app showed Progressing while the Job ran and Healthy once it had succeeded, and OutOfSync while the
+   Job of an earlier run was still there, since the apps sync without pruning.
 4. Follow it: `oc get configmap -n vllm-notebook -l app.kubernetes.io/component=compare-run`, or the Job's log.
 5. Open `compare_images.ipynb` in the notebook to see the results.
 
@@ -746,7 +748,8 @@ per second, over the whole level, is not timed per token.
   (`SERVER_CONTAINER`), and no warm compile cache. Images built for these runs, not by the pattern: two images built on
   vLLM 0.33 (0.33.0 and a development build of it), each with Ray Serve LLM and this pattern's server files; the 0.33.0
   one got Ray 2.60.0, with one import line in Ray changed for a vLLM module that moved in 0.33. The image the cluster
-  builds from `inference-server/` (vLLM 0.29.0) has not run as a side. In one of the three runs both sides started
+  builds from `inference-server/` (vLLM 0.29.0) was not a side in them; it has been a side only in the first run on
+  OpenShift below, without twins. In one of the three runs both sides started
   through a wrapper `command` that then ran the pattern's entrypoint, on the same images with a test layer added, which
   on one side also changed how the server's processes read the model's weights: test code in those processes read every
   page of the larger weight tensors before vLLM copied them. In that run the wrapper also recorded the page-cache state
@@ -766,23 +769,42 @@ per second, over the whole level, is not timed per token.
   one side, stopped by vLLM's start-up memory check, was started once more and finished its launch (see "On one
   machine"). The first run, from before that second start existed, lost one of its four scored launches to the
   same check and ended partial. With 2 pairs no verdict was possible by design; the runs checked the harness, and
-  their figures say nothing about the two releases. The Kubernetes backend has never started a real server.
-- Tokens per joule has been computed from real power samples in the two smoke runs only, from nvidia-smi (2 samples a
-  second); the three runs with twins measured no energy. It has never been computed from DCGM: that reader is tested
-  only against hand-written answers in the documented format (a Prometheus `query_range` matrix), and the DCGM label
-  names it matches on (`exported_pod`, `exported_namespace`, `pod`, `Hostname`) have not been checked against a real
-  DCGM exporter. The 2-second DCGM interval is set through ClusterPolicy fields the GPU Operator's CRD defines
-  (`spec.dcgmExporter.env`, `spec.dcgmExporter.serviceMonitor.interval`), but it has not been applied on a cluster:
-  whether the cluster's monitoring then keeps a sample every 2 seconds is unchecked.
-- No comparison has run on OpenShift yet, with or without a GPU. The runner's Job, with the chart's RBAC, has run on
-  a plain Kubernetes cluster (kind) against GuideLLM's mock server: it scaled a stand-in server to 0 and back, wrote
-  the status ConfigMap and the termination message, and, when its Job was deleted mid-launch, recorded the launch
-  as `STOPPED`, deleted the side and brought the server back within seconds. That run came before the refusal of a
-  second run, the scale read-back, the early restore on a stop and the twins; on Kubernetes those are covered by
-  unit tests only. None of it says anything about OpenShift's restricted security context, the internal registry,
-  the cluster's monitoring or Argo CD. Under docker (`scripts/compare-local.sh`), against the same mock server, a
-  second run started during a run refused (exit 5) and changed nothing, and a runner stopped mid-launch saved the
-  run as partial / `STOPPED` and started the stand-in live server again.
+  their figures say nothing about the two releases. The Kubernetes backend has started real servers only in the runs
+  on OpenShift below.
+- Tokens per joule has been computed from real power samples in the two smoke runs, from nvidia-smi (2 samples a
+  second), and from DCGM in the two runs in mode `levels` on OpenShift below; the three runs with twins measured no
+  energy. On OpenShift the reader found the side pods' power in the cluster's monitoring for every scored level (8 in
+  the first run, 12 in the second), each from DCGM's energy counter with 15 power samples in its 30 seconds: one every
+  2 seconds, the interval that the pattern's ClusterPolicy fields (`spec.dcgmExporter.env`,
+  `spec.dcgmExporter.serviceMonitor.interval`) ask for while the comparison is on. Which of the DCGM label names it
+  matches on (`exported_pod`, `exported_namespace`, `pod`, `Hostname`) the exporter used was not recorded; otherwise
+  the reader is tested only against hand-written answers in the documented format (a Prometheus `query_range` matrix).
+- On OpenShift the comparison has run three times, all complete, on two throwaway clusters on AWS (OpenShift
+  4.22.18, three m5.2xlarge nodes that are both control plane and workers, and the pattern's g6.2xlarge node with one
+  NVIDIA L4). In each, Argo CD created the Job, the runner's pod ran under the `restricted-v2` security context
+  constraint, the runner scaled the server to 0 and brought it back to one Ready pod, and no side pod was left. Every
+  case got NO VERDICT, as runs without twins must:
+  - Mode `levels`, with the comparison code of an earlier commit of `main`: side A upstream `vllm/vllm-openai`
+    v0.33.0, side B this pattern's own server from the cluster's internal registry (preset `ray-serve-llm`, vLLM
+    0.29.0), one warm-up launch per side, then 2 rounds without twins, 30 s at each of 1 and 8 concurrent streams. All
+    6 launches finished, in 29 minutes, with DCGM energy figures; every launch's engine restart count was 0, and the
+    server answered requests after the run.
+  - Mode `levels` again, upstream vLLM v0.32.0 and v0.33.0, 1 round without twins or warm-up, 30 s at each of 1, 4,
+    8, 16, 32 and 64 concurrent streams, with DCGM energy figures: the levels run behind the surge rate of the next run
+    ("Picking the surge rate"). It took 21 minutes.
+  - Mode `scaleout`, with the code described here, upstream vLLM v0.32.0 and v0.33.0 ("The benchmark's scale-out
+    mode").
+
+  Not run on OpenShift: twins, the default settings and the length of a run with them, a run that ends partial or is
+  stopped (the stop path and the early restore on a stop), the refusal of a second run, keda mode during a run (the
+  runner's pause), a side with `args` of its own, and a node with more than one GPU. The side pods' security context
+  constraint was not recorded. Before those runs, the runner's Job, with the chart's RBAC, ran on a plain Kubernetes
+  cluster (kind) against GuideLLM's mock server: it scaled a stand-in server to 0 and back, wrote the status ConfigMap
+  and the termination message, and, when its Job was deleted mid-launch, recorded the launch as `STOPPED`, deleted
+  the side and brought the server back within seconds. That run came before the refusal of a second run, the scale
+  read-back, the early restore on a stop and the twins. Under docker (`scripts/compare-local.sh`), against the same
+  mock server, a second run started during a run refused (exit 5) and changed nothing, and a runner stopped
+  mid-launch saved the run as partial / `STOPPED` and started the stand-in live server again.
 - DCGM's answers are parsed under both the old and the new DCGM exporter metric names, in tests only.
 - `ray-serve-llm` sides finished scored launches in the three runs with twins, with and without `args`
   (`--attention-backend FLASHINFER`, and in one run also `--safetensors-load-strategy eager`), but their servers turned
@@ -855,15 +877,18 @@ checks it when it starts, and exits with code 2 when Ray sees too few GPUs.
 **Half a GPU each is a test setup.** The default AWS node has one L4. On it, a second replica can only share that
 GPU (`gpuPerReplica: 0.5`, with `gpu_memory_utilization: 0.4`). Two replicas on one GPU add no GPU compute: they take
 turns on it, and each has less memory for its cache. Use that setup to watch the autoscaler work, not to serve more.
-The real case is a node with several GPUs. No replica on a share of a GPU has started on a real GPU yet (see "What
-has not been checked for scale out").
+The real case is a node with several GPUs. On OpenShift, on the default AWS node, a server with this setup grew from
+one replica to two under load, and both replicas answered requests; a node with several GPUs has not been tried (see
+"What has not been checked for scale out").
 
 What you can see:
 
 - The server's log has one `rhvp-scale` JSON line each time a replica count changes, for example
   `{"event":"rhvp-scale","ts":1794551388.123,"app":"llm","deployment":"LLMServer:qwen2_5-0_5b-instruct","from":1,"to":2,"reason":"target"}`.
   `reason` `target` is the autoscaler's decision; a `running` line follows once the new replica serves. While
-  `maxReplicas` is above `minReplicas`, the server checks the counts every second.
+  `maxReplicas` is above `minReplicas`, the server checks the counts every second. In the run on OpenShift, these
+  lines reached the pod log inside Ray's own JSON log records, as the text of each record's `message` field, so
+  search for `rhvp-scale` anywhere in a line.
 - `oc exec -n vllm-inference deploy/ray-serve-llm -c server -- python rhvp_status.py` prints the app's state, then
   one line per deployment, such as `LLMServer:qwen2_5-0_5b-instruct: running 2, target 2`.
 - The pod stays Ready while a replica is added or removed.
@@ -918,7 +943,9 @@ the server's app keeps that value on later syncs. To change it, put a new value 
 delete the server pods. The value can also change on its own once: the ignore rule comes with the clustergroup app and
 the Secret with the server's app, and when keda mode is turned on in a running install, a second sync of the server's
 app before its rule arrives replaces the token. If the metric stays missing after you turn keda mode on, delete the
-server pods. Neither case has been checked on a cluster.
+server pods. Neither case has been checked on a cluster. In the one run on OpenShift, where keda mode was turned on in
+a running install, the cluster's monitoring had no series for the metric until the first requests reached the
+server, also after the server pod had been deleted once; under load it had the metric, and the server scaled out.
 
 Before you turn it on:
 
@@ -1005,8 +1032,9 @@ Each scored launch, a twin's as well:
 A warm-up launch starts one server; a scored launch starts two. Each launch keeps one record per server it started
 (`servers`: replica, command, environment, GPU request), and `starts` counts them. With 8 rounds and the warm-up, a
 run is 34 launches and 66 server starts. We estimate that at about 5 to 7 hours with the example's settings (a
-300-second surge per scored launch); no run of this mode has been timed on a GPU or a cluster, so take that as a
-rough figure.
+300-second surge per scored launch); no run of that length has been timed on a GPU or a cluster, so take that as a
+rough figure. The one run on OpenShift, 2 rounds without twins or a warm-up (4 launches, 8 server starts, a
+420-second surge in each), took about 38 minutes.
 
 When GuideLLM times out, the launch runs once more from a new first replica, as a launch in mode `levels` does ("What
 a run does"): GuideLLM, the router and the replicas that had started are taken down, a new first replica is started
@@ -1086,10 +1114,12 @@ it is below two for each request of the whole surge plus 64 (the router holds tw
 flight). A stop in this mode also takes down
 the router and the second replica, so the Job's grace period is at least 420 seconds in this mode
 (`compare.terminationGracePeriodSeconds` in `charts/all/notebook/values.yaml`, 300 in mode `levels`). The OpenShift
-scale round has run on a plain Kubernetes cluster without a GPU (kind, with GuideLLM's mock servers and GPU feature
-discovery's labels set by hand: one complete run, and two stopped during the surge), in an earlier version that did
-not yet check the node's GPU resource or sharing strategy or raise the runner's open-file limit; those have run only
-in the unit tests. It has not run on OpenShift or on a GPU.
+scale round has run once on OpenShift, with `sharedGpu: true` on the default AWS node with its L4 offered as two
+time-sliced shares: the node check passed, and the run's notes gave the runner's open-file limit as 1024, with a hard
+limit of 524288, raised to 524288 ("What has not been checked for scale out" has the rest). Before that it ran on a
+plain Kubernetes cluster without a GPU (kind, with GuideLLM's mock servers and GPU feature discovery's labels set by
+hand: one complete run, and two stopped during the surge), in an earlier version that did not yet check the node's
+GPU resource or sharing strategy or raise the runner's open-file limit.
 
 #### Picking the surge rate
 
@@ -1134,42 +1164,81 @@ and twin and gets NO VERDICT (`zero_floor`): the run checks the harness, not a r
 
 ### What has not been checked for scale out
 
-- No GPU has scaled yet: neither autoscaler has added a real vLLM replica or pod.
-- No replica on a share of a GPU (`server.gpuPerReplica` below 1) has started on a real GPU. The one try, on one GPU
-  with `gpuPerReplica: 0.5`, failed when the first replica's vLLM engine started: the engine asked Ray for a whole GPU
-  for its worker, which the half-GPU placement bundle cannot hold (`Cannot schedule RayWorkerProc with the placement
-  group`). The server now gives the engine its share (`VLLM_RAY_PER_WORKER_GPUS` in the replica's `runtime_env`).
-  That was checked on CPU only: with Ray 2.60.0's Ray Serve LLM code, a Ray node with one GPU in name only, and a
-  stand-in for vLLM's engine process, the same error came back without the setting and the worker was placed with it.
-- Ray Serve's autoscaling in the pod was checked on CPU only, in the pattern's server image, with a stand-in Ray Serve
-  app whose replicas take 20 seconds to start, scaling from 1 to 2: the `rhvp-scale` lines showed the decision and
-  then 2 running replicas, the app stayed RUNNING, the ready file stayed, every request was answered, and
-  `rhvp_status.py` printed the counts. The deployment names of a real app, the shared-GPU placement and the GPU check
-  at start have not run.
-- Keda mode has not run on OpenShift: not the operator install, the KedaController that the operator and Argo CD both
-  manage, the trust in the Thanos Querier's certificate, the ServiceMonitor, the labels of the real metric, the Argo
-  CD rule that keeps the pause annotation, the metrics token, or GPU time-slicing. For the token that means: that the
-  cluster's monitoring reads Secret `ray-serve-llm-metrics-token` and sends it; that Argo CD keeps its first value;
-  the order in which the ignore rule and the Secret land when keda mode is turned on in a running install; and that a
-  running pod keeps its token file when the Secret changes, which Kubernetes documents for a `subPath` mount. Nor has
-  a scrape with the token run while a Serve app runs on a Ray build that checks the token. Keda mode's objects were
-  checked on a plain Kubernetes cluster (kind) with upstream KEDA 2.19 and stand-ins for the metric and the server:
-  the ScaledObject took the Deployment from 1 to 2 pods when the waiting count rose, the pause held it at 0 for a
-  minute, and removing the pause brought back 1 pod. Through a Service, a new pod got none of the requests of a client
-  with open connections; through the router, it got a share.
-- No server pod has yet been seen exporting `ray_vllm_num_requests_waiting` under that name on its metrics port. If
-  the name or its labels differ, the query answers nothing, KEDA reads that as 0, and the server never scales.
+- Both autoscalers have added a real vLLM replica or server pod on a GPU once each, on OpenShift (4.22.18, on AWS) on
+  the default node with its one NVIDIA L4 (the next bullets). Not tried: a node with several GPUs, server pods on more
+  than one node, and the two layers together.
+- Replicas on a share of a GPU (`server.gpuPerReplica` below 1) have started on a real GPU once, in the run on
+  OpenShift below: two replicas with `gpuPerReplica: 0.5` on one L4, each engine with its share
+  (`VLLM_RAY_PER_WORKER_GPUS` in the replica's `runtime_env`) in its replica's placement group. An earlier try, on one
+  GPU with `gpuPerReplica: 0.5`, failed when the first replica's vLLM engine started: the engine asked Ray for a whole
+  GPU for its worker, which the half-GPU placement bundle cannot hold (`Cannot schedule RayWorkerProc with the
+  placement group`). The server now gives the engine its share. Before the run on OpenShift, that was checked on CPU
+  only: with Ray 2.60.0's Ray Serve LLM code, a Ray node with one GPU in name only, and a stand-in for vLLM's engine
+  process, the same error came back without the setting and the worker was placed with it.
+- Ray Serve's autoscaling in the pod has run once on OpenShift, with the half-GPU setup of "Inside the pod" (1 to 2
+  replicas, `gpuPerReplica: 0.5`, `gpu_memory_utilization: 0.4`, `targetOngoingRequests: 4`) and 32 clients sending
+  requests at once. The `rhvp-scale` lines showed the decision (`target`) and, 85 seconds later, 2 running replicas;
+  `rhvp_status.py` showed `LLMServer:qwen2_5-0_5b-instruct: running 2, target 2` 131 seconds after the load started.
+  Both replicas answered requests, all 1,792 requests were answered, and the pod was still Ready at the end, with no
+  restart. With two replicas the GPU had 19,286 MiB of its 23,034 MiB in use. Not seen there: Ray Serve removing the
+  second replica (the run ended before its downscale delay), the GPU check at start refusing too few GPUs (it passed),
+  and the comparison reading these lines from Ray's JSON log records (unit tests only). Before that run, it was
+  checked on CPU only, in the pattern's server image, with a stand-in Ray Serve app whose replicas take 20 seconds to
+  start, scaling from 1 to 2: the `rhvp-scale` lines showed the decision and then 2 running replicas, the app stayed
+  RUNNING, the ready file stayed, every request was answered, and `rhvp_status.py` printed the counts.
+- Keda mode has run once on OpenShift, turned on in a running install on the default AWS node, with
+  `gpu_memory_utilization` 0.4 and time-slicing offering the L4 as two shares: the node then had `nvidia.com/gpu`
+  allocatable 2 and GPU feature discovery's labels `nvidia.com/gpu.replicas` 2, `nvidia.com/gpu.sharing-strategy`
+  `time-slicing` and `nvidia.com/gpu.product` `NVIDIA-L4-SHARED`. Red Hat's operator installed
+  (`custom-metrics-autoscaler.v2.19.0-4`), the `keda-config` app was Synced and Healthy with the KedaController
+  reporting KEDA 2.19.0 installed, and the ScaledObject turned Ready. Under 32 clients sending requests at once, the
+  trigger's query answered 24 waiting requests and the autoscaler asked for a second pod 35 seconds after the load
+  started; the second pod was Ready on the same GPU node 272 seconds after the load started and answered on its own
+  address; all 427 requests were answered; and the Deployment went back to one pod 285 seconds after the load
+  stopped. So the operator's trust in the Thanos Querier's certificate, the ServiceMonitor's scrape and the labels of
+  the real metric worked there. Not checked there: the Argo CD rule that keeps the pause annotation and the runner's
+  own Role (no comparison ran in keda mode), more than 2 pods, and a second GPU node. For the token: the scrape
+  worked, but Ray 2.60.0 checks no token on its metrics port, so that the cluster's monitoring reads Secret
+  `ray-serve-llm-metrics-token` and sends it is unchecked; so are that Argo CD keeps its first value, whether the value
+  changed when keda mode was turned on in that running install (the order in which the ignore rule and the Secret
+  land), and that a running pod keeps its token file when the Secret changes, which Kubernetes documents for a
+  `subPath` mount (the server started with that mount). Nor has a scrape with the token run while a Serve app runs on
+  a Ray build that checks the token. Before that run, keda mode's objects were checked on a plain Kubernetes cluster
+  (kind) with upstream KEDA 2.19 and stand-ins for the metric and the server: the ScaledObject took the Deployment
+  from 1 to 2 pods when the waiting count rose, the pause held it at 0 for a minute, and removing the pause brought
+  back 1 pod. Through a Service, a new pod got none of the requests of a client with open connections; through the
+  router, it got a share.
+- A server pod has been seen exporting `ray_vllm_num_requests_waiting` under that name on its metrics port only under
+  load, in the keda run above. Before the first request the cluster's monitoring had no series for it ("Across pods"),
+  and the one scrape of the pod's metrics port before the load came back with no `ray_vllm_` lines at all; why is not
+  proven. If the name or its labels differ in another release, the query answers nothing, KEDA reads that as 0, and
+  the server never scales.
 - `compileCache.mode` `node` and `shared` have not run on OpenShift.
-- The benchmark's mode has run with real vLLM servers only in an earlier version, under the earlier rule (rounds of
-  A and B, no twins), with docker on one machine with one GPU: three runs of one round each, too few for any
-  verdict. One completed; in it, one side's second replica answered only after the surge had ended. Two ended
-  partial: at the rate they used, nearly every request missed the latency goals and some failed, so the share within
-  the goals told the sides nothing, which is why "Picking the surge rate" exists. The current version, with twins,
-  has run end to end only against GuideLLM's mock servers: with docker, and once on a plain Kubernetes cluster without
-  a GPU, in an earlier version of its OpenShift scale round ("The benchmark's scale-out mode"). It has not run on a
-  GPU or on OpenShift, its run length above is an estimate, and GPU time-slicing has not run on a cluster with it. The
-  GPU feature discovery label names and values it reads come from NVIDIA's documentation, not from a node, and the
-  runner pod's open-file limit on OpenShift has not been read.
+- The benchmark's mode has run once on OpenShift, in its current version, on a throwaway cluster on AWS (OpenShift
+  4.22.18) whose g6.2xlarge node offered its NVIDIA L4 as two time-sliced shares (`nvidia.com/gpu` allocatable 2, with
+  GPU feature discovery's labels `nvidia.com/gpu.count` 1 and `nvidia.com/gpu.replicas` 2). Upstream vLLM v0.32.0
+  (A) and v0.33.0 (B), preset `vllm-openai`, `sharedGpu: true`, 2 rounds without twins or a warm-up; 256 prompt and
+  128 output tokens per request, 53.8 requests per second for 420 seconds through the router, the second replica asked
+  for 30 seconds after the first request, and goals of 1000 ms to the first token and 100 ms between tokens. All 4
+  scored launches completed, with no failed request. In each, the second replica answered 74 to 77 seconds after it
+  was asked for, and got 42.7% to 43.1% of the surge's requests; it first got requests 105.7 (A) and 105.3 (B)
+  seconds after the surge's first request (each side's median). Requests still running when the surge ended, which
+  the share within the goals leaves out, were 27.8% (A) and 27.1% (B) of those sent. Every case got NO VERDICT
+  (`too_few_rounds`), as 2 rounds without twins must. The rate was 1.2 times 44.8 requests per second, the highest
+  rate of a levels run of the same sides in which every level, up to 64 concurrent streams, met the goals on both
+  sides, so 44.8 was only a lower bound; at 53.8 the share within the goals was 4.4% on both sides (medians), and
+  `results.md` said that a lower `scaleOut.requestRate` may suit these sides.
+- Not run in this mode on OpenShift: twins, a warm-up launch, a `ray-serve-llm` side, `sharedGpu: false` on a node
+  with two GPUs or more, a second replica left with no node (the 2-minute limit), a GuideLLM time-out, a stop, and a
+  run of the default length, whose length above is an estimate. The value of the `nvidia.com/gpu.sharing-strategy`
+  label was read on the node of the keda run, not of this one. With real vLLM servers the mode has otherwise run only
+  in an earlier version, under the earlier rule (rounds of A and B, no twins), with docker on one machine with one GPU:
+  three runs of one round each, too few for any verdict. One completed; in it, one side's second replica answered only
+  after the surge had ended. Two ended partial: at the rate they used, nearly every request missed the latency goals
+  and some failed, so the share within the goals told the sides nothing, which is why "Picking the surge rate" exists.
+  With twins, the current version has run end to end only against GuideLLM's mock servers: with docker, and once on a
+  plain Kubernetes cluster without a GPU, in an earlier version of its OpenShift scale round ("The benchmark's
+  scale-out mode").
 - No run has used MIG devices. That `nvidia-smi`'s GPU query lists the parent GPU's UUID in a container given a MIG
   device, and that `nvidia-smi -L` lists the MIG device's own UUID under it, is from NVIDIA's documented output, not
   from a run here.
