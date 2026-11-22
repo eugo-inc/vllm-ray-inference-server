@@ -355,24 +355,25 @@ and uses a serving certificate; the Route uses `reencrypt` termination.
   depend on the number of launches.
 - Every sentence the comparison notebook shows is in `rhvp_compare/words.py`.
 
-Checked on a plain Kubernetes cluster (kind) with GuideLLM mock servers: the Job and its RBAC, the server's scale
-to 0 and back, the status ConfigMap, the termination message, and the stop path (Job deleted mid-launch). That run
-came before the refusal of a second run, the scale read-back, the early restore on a stop and the twins, which on
-Kubernetes are covered by unit tests only (under docker, the refusal and the stop path have run against the mock
-server). Checked with real servers, under docker on one GPU (`scripts/compare-local.sh`), under the earlier rule (A
-and B only, no twins): two 2-pair smoke runs of the example's two vLLM images with smaller settings. The second
-finished all 6 launches, measured by GuideLLM, with tokens per joule from nvidia-smi, one of them after a second
-start past vLLM's start-up memory check (README, "On one machine"); the first, from before that second start, lost a
-launch to that check. Checked with real servers under the twin rule, under docker on one machine with one GPU whose
-memory is the machine's own: three comparisons whose sides were both `ray-serve-llm` (this pattern's own server), on two
-images with vLLM 0.33 (0.33.0 and a development build of it; not the vLLM 0.29.0 this image pins) built for the test
-with Ray Serve LLM and this pattern's server files, each planned as 8 rounds with twins on both sides after one warm-up
-launch per side. Two finished all 8 rounds (34 launches each). A memory guard around the runner stopped the third
-(SIGTERM) in round 7: that launch is `STOPPED`, and the run was saved partial and analyzed on its 6 finished rounds. No
-other launch failed, and `start_retries` was 0 in every launch (an engine that Ray Serve replaced inside a start does
-not count there; see the restart count below). GuideLLM timed out in six launches across the three; each ran again from
-a new start (`load_retries` 1) and finished. Their settings: the example's model, already on the model volume; one load
-level, 5 s at 1 stream; `gpuMemoryUtilization` 0.12; `startup/first_answer_s` the only primary case; energy `none`; no
+Checked on a plain Kubernetes cluster (kind) with GuideLLM mock servers: the Job and its RBAC, the server's scale to 0
+and back, the status ConfigMap, the termination message, and the stop path (Job deleted mid-launch). That run came
+before the refusal of a second run, the scale read-back, the early restore on a stop and the twins. On Kubernetes the
+refusal of a second run, the early restore on a stop and the twins are covered by unit tests only (under docker, the
+refusal and the stop path have run against the mock server); the scale read-back has since run on OpenShift (below).
+Checked with real servers, under docker on one GPU (`scripts/compare-local.sh`), under the earlier rule (A and B only,
+no twins): two 2-pair smoke runs of the example's two vLLM images with smaller settings. The second finished all 6
+launches, measured by GuideLLM, with tokens per joule from nvidia-smi, one of them after a second start past vLLM's
+start-up memory check (README, "On one machine"); the first, from before that second start, lost a launch to that check.
+Checked with real servers under the twin rule, under docker on one machine with one GPU whose memory is the machine's
+own: three comparisons whose sides were both `ray-serve-llm` (this pattern's own server), on two images with vLLM 0.33
+(0.33.0 and a development build of it; not the vLLM 0.29.0 this image pins) built for the test with Ray Serve LLM and
+this pattern's server files, each planned as 8 rounds with twins on both sides after one warm-up launch per side. Two
+finished all 8 rounds (34 launches each). A memory guard around the runner stopped the third (SIGTERM) in round 7: that
+launch is `STOPPED`, and the run was saved partial and analyzed on its 6 finished rounds. No other launch failed, and
+`start_retries` was 0 in every launch (an engine that Ray Serve replaced inside a start does not count there; see the
+restart count below). GuideLLM timed out in six launches across the three; each ran again from a new start
+(`load_retries` 1) and finished. Their settings: the example's model, already on the model volume; one load level, 5 s
+at 1 stream; `gpuMemoryUtilization` 0.12; `startup/first_answer_s` the only primary case; energy `none`; no
 `SERVER_CONTAINER`; cold compile caches. Their code: `notebooks/rhvp_compare` and `scripts/compare-local.sh` of commit
 `7ec0b75` (comments aside), and server files with an earlier, unmerged form of `serve_app.engine_flags` (each value read
 as YAML, nothing checked against `AsyncEngineArgs`); one run's sides started through a wrapper `command` that then runs
@@ -393,19 +394,19 @@ those logs), the pattern's default model length (8192) and vLLM's own source lin
 are the pattern's ready file (`/tmp/r/rhvp-ready`) and listen address (`http://0.0.0.0:8000/`), and no line is a copy of
 a line of those logs.
 Later runs with real servers under the twin rule, one of them with a warm compile cache, are not among the three.
-Checked on OpenShift (4.22.18, two throwaway clusters on AWS, each with the pattern's g6.2xlarge node with one NVIDIA
-L4), three runs without twins, each complete with every case NO VERDICT: mode `levels` with the comparison code of an
-earlier commit of `main`, upstream `vllm/vllm-openai` v0.33.0 (A) against the image the cluster builds from
-`inference-server/` (B, preset `ray-serve-llm`, vLLM 0.29.0, from the internal registry), one warm-up launch per side
-and 2 rounds, 30 s at 1 and 8 streams (6 launches in 29 minutes, `engine_restarts` 0 in each); mode `levels` with
-upstream vLLM v0.32.0 and v0.33.0, 1 round without a warm-up, 30 s at each of 1, 4, 8, 16, 32 and 64 streams (21
-minutes); and mode `scaleout` with the current code ("How scale out works"). In each, Argo CD created the Job, the
-runner pod ran under the `restricted-v2` SCC, the server went to 0 and back to one Ready pod, and no side pod was
-left. The `notebook` app showed Progressing while a Job ran, Healthy once one had succeeded, and OutOfSync while an
-earlier run's Job was still there (no pruning). Both `levels` runs got tokens per joule from DCGM for every scored
-level (8 and 12), each from the energy counter with 15 power samples in its 30 s, so the 2 s interval held; which of
-the DCGM label names matched was not recorded. The server records of OpenShift sides carry no server environment
-(`env_source: "none"`).
+Checked on OpenShift in the three runs described here (4.22.18, two throwaway clusters on AWS, each with the pattern's
+g6.2xlarge node with one NVIDIA L4), without twins, each complete with every case NO VERDICT: mode `levels` with the
+comparison code of an earlier commit of `main`, upstream `vllm/vllm-openai` v0.33.0 (A) against the image the cluster
+builds from `inference-server/` (B, preset `ray-serve-llm`, vLLM 0.29.0, from the internal registry), one warm-up launch
+per side and 2 rounds, 30 s at 1 and 8 streams (6 launches in 29 minutes; B's `engine_restarts`, which only a
+`ray-serve-llm` side counts, 0 in each); mode `levels` with upstream vLLM v0.32.0 and v0.33.0, 1 round without a
+warm-up, 30 s at each of 1, 4, 8, 16, 32 and 64 streams (21 minutes); and mode `scaleout` with the current code ("How
+scale out works"). In each, Argo CD created the Job, the runner pod ran under the `restricted-v2` SCC, the server went
+to 0 and back to one Ready pod, and no side pod was left. The `notebook` app showed Progressing while a Job ran, Healthy
+once one had succeeded, and OutOfSync while an earlier run's Job and its config ConfigMap were still there (no pruning).
+Both `levels` runs got tokens per joule from DCGM for every scored level (8 and 12), each from the energy counter with
+15 power samples in its 30 s, so the 2 s interval held; which of the DCGM label names matched was not recorded. The
+server records of OpenShift sides carry no server environment (`env_source: "none"`).
 Not checked yet: the twin rule with real servers beyond those three runs: with a `vllm-openai` or `custom` side, on the
 image `inference-server/` builds (vLLM 0.29.0), with the example's settings and default primary cases, with energy, with
 `SERVER_CONTAINER`, with the current `serve_app.engine_flags` and the runner's later changes
@@ -569,25 +570,24 @@ each part:
   `nvidia.com/gpu.product` `NVIDIA-L4-SHARED`) and `gpu_memory_utilization` 0.4: Red Hat's operator
   (`custom-metrics-autoscaler.v2.19.0-4`) installed, app `keda-config` Synced and Healthy with KedaController `keda`
   reporting KEDA 2.19.0 installed, ScaledObject Ready. Under 32 clients the trigger's query read 24 waiting requests and
-  the HPA asked for a second pod 35 s after the load started; the second pod was Ready on the same node at 272 s and
-  answered on its own address; 427 of 427 requests were answered; back to one pod 285 s after the load stopped. During
-  the load the second pod's metrics port exported `ray_vllm_num_requests_waiting` under that name. Before the first
-  request Thanos had no series for it (for about 45 minutes, also after the server pod was deleted once), and the one
-  scrape of the pod's port came back with no `ray_vllm_` lines; why is not proven. The server started with the
-  `subPath` token mount.
+  the HPA had asked for a second pod by 35 s after the load started (checked about every 17 s); the second pod was Ready
+  on the same node by 272 s and answered on its own address; 427 of 427 requests were answered; back to one pod by 285 s
+  after the load stopped. During the load the second pod's metrics port exported `ray_vllm_num_requests_waiting` under
+  that name. Before the first request Thanos had no series for it (for about 45 minutes, also after the server pod was
+  deleted once), and the one scrape of the pod's port came back with no `ray_vllm_` lines; why is not proven. The server
+  started with the `subPath` token mount.
 - Mode `scaleout` as the OpenShift Job, with the current code, `sharedGpu: true` on that node with time-slicing on
   (allocatable 2, `nvidia.com/gpu.count` 1, `nvidia.com/gpu.replicas` 2; the strategy label's value was not recorded
   for this node): upstream vLLM v0.32.0 (A) and v0.33.0 (B), preset `vllm-openai`, 2 rounds, no twins, no warm-up,
   53.8 requests/s for 420 s, the second replica asked for 30 s after the first request, goals of 1000 ms to the first
-  token and 100 ms between tokens. `check_plan` passed; the notes gave the runner's open-file limit as 1024 (hard 524288), raised to
-  524288; the Job's grace period was 420 s. All 4 scored launches completed with 0 failed requests and
-  `start_retries`, `engine_restarts` and `load_retries` 0; the second replica's time to first answer was 74.3 to 76.8 s
-  (from its ask), it first got requests about 105 s after the surge's first request and got 42.7% to 43.1% of the
-  requests; 27.8% (A) and 27.1% (B) of the requests sent were still running when the surge ended (left out, as
-  GuideLLM does). Every case NO VERDICT (`too_few_rounds`). The rate was 1.2 times 44.8 requests/s, a lower bound from
-  a `levels` run in which every level up to 64 streams met the goals on both sides; at 53.8 the share within the goals
-  was 4.4% on both sides (medians), and `results.md` said a lower rate may suit these sides. The run took about 38
-  minutes.
+  token and 100 ms between tokens. `check_plan` passed; the notes gave the runner's open-file limit as 1024 (hard
+  524288), raised to 524288; the Job's grace period was 420 s. All 4 scored launches completed with 0 failed requests
+  and `start_retries`, `engine_restarts` and `load_retries` 0; the second replica's time to first answer was 74.3 to
+  76.8 s (from its ask), it first got requests about 105 s after the surge's first request and got 42.7% to 43.1% of the
+  requests; 27.8% (A) and 27.1% (B) of the requests sent were still running when the surge ended (left out, as GuideLLM
+  does). Every case NO VERDICT (`too_few_rounds`). The rate was 1.2 times 44.8 requests/s, a lower bound from a `levels`
+  run in which every level up to 64 streams met the goals on both sides; at 53.8 the share within the goals was 4.4% on
+  both sides (medians), and `results.md` said a lower rate may suit these sides. The run took about 38 minutes.
 
 The metrics token was checked on CPU only, without a cluster: one Ray head per container, started as `serve_app.py`
 starts it, with no Serve app, a token file mounted at `/etc/ray-auth/token` and `RAY_AUTH_TOKEN_PATH` set. Ray 2.60.0
@@ -636,11 +636,13 @@ Not checked yet:
 - `compileCache.mode` `node` and `shared`, and `fsGroupChangePolicy: OnRootMismatch`, on OpenShift.
 - The scale-out mode on OpenShift beyond the one run above: twins, a warm-up launch, a `ray-serve-llm` side,
   `sharedGpu: false` on a node with two GPUs or more, a second replica left with no node (`kube.REPLICA_PENDING_S`), a
-  GuideLLM time-out, a stop (`kube.stop_budget_seconds(2)`), and a run of the default length; the value of
-  `nvidia.com/gpu.sharing-strategy` was read on the keda run's node, not on that run's. With twins, the current mode has run only against GuideLLM's mock servers: with docker, and on
-  kind without a GPU (labels set by hand; one complete run, two stopped during the surge) in a version before the
-  allocatable and sharing-strategy checks and the runner's open-file raise. The server records of OpenShift sides
-  carry no server environment (`env_source: "none"`).
+  GuideLLM time-out, a stop (`kube.stop_budget_seconds(2)`), a run of the default length, the node check refusing a run
+  (`kube.node_fits`, exit 2, `PLAN_INVALID`, naming what each GPU node offers), and the run note's warning of a low
+  open-file limit (`kube.open_files_needed`); those last two have run only in the unit tests. The value of
+  `nvidia.com/gpu.sharing-strategy` was read on the keda run's node, not on that run's. With twins, the current mode has
+  run only against GuideLLM's mock servers: with docker, and on kind without a GPU (labels set by hand; one complete
+  run, two stopped during the surge) in a version before the allocatable and sharing-strategy checks and the runner's
+  open-file raise. The server records of OpenShift sides carry no server environment (`env_source: "none"`).
 - An upscale replica that keeps failing: whether Ray then marks the app UNHEALTHY, which would remove the ready file
   and take the one serving replica out of the Service.
 - The comparison's scale-out mode on MIG devices: that nvidia-smi's GPU query lists the parent GPU's UUID in a
