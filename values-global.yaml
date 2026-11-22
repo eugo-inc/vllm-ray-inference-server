@@ -34,8 +34,12 @@ global:
   # Any other value, or none, installs neither operator, and the server's app
   # fails to render with a message that names this setting.
   # Set it in your fork BEFORE you install. Switching a running install is not
-  # supported: install to reuse removes nothing (the apps sync without pruning),
-  # and reuse to install adds a second copy of both operators.
+  # supported, and has not been tried. Install to reuse removes nothing (the
+  # apps sync without pruning): the pattern's operator namespaces,
+  # OperatorGroups and Subscriptions stay but are no longer updated, and its
+  # nfd-config and nvidia-gpu-config apps stay and keep applying its
+  # NodeFeatureDiscovery and ClusterPolicy from Git; deleting those two apps
+  # deletes both. Reuse to install adds a second copy of both operators.
   gpuOperators: install
 
   # The model the server loads from Hugging Face.

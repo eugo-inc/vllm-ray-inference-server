@@ -708,8 +708,12 @@ only as each level's note ("N power samples in the window; at least 10 are neede
 runner's scale-out node check (`KubeBackend.check_plan`) names the cluster's ClusterPolicy in its hint.
 
 Not checked yet: any of this on a cluster. Only renders, the values checks and unit tests have run. Switching a
-running install from `install` to `reuse` (nothing is removed, as the apps sync without pruning) or back (a second
-copy of both operators) is not supported and has not been tried.
+running install is not supported and has not been tried. From `install` to `reuse` nothing is removed, as the apps
+sync without pruning: the pattern's operator Namespaces, OperatorGroups and Subscriptions stay, no longer updated, and
+its `nfd-config` and `nvidia-gpu-config` Applications stay with their automated sync and keep applying the
+NodeFeatureDiscovery and ClusterPolicy from Git (the two charts still render them when `values-global.yaml` says
+`reuse`). Both Applications carry Argo CD's foreground resources finalizer, so deleting them deletes those two
+objects. From `reuse` to `install` adds a second copy of both operators.
 
 ## How to deploy
 

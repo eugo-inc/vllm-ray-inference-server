@@ -259,9 +259,12 @@ OpenShift guide uses; use yours.
 
 Any value other than `install` or `reuse`, or none, installs neither operator, and the server's app fails to render
 with a message that names the setting; `scripts/validate-values.sh` refuses it too. Switching a running install is
-not supported: from `install` to `reuse` removes nothing, because the apps sync without pruning (the pattern's own
-operators keep running, no longer updated from Git), and from `reuse` to `install` adds a second copy of both
-operators next to the cluster's. Neither switch has been tried on a cluster.
+not supported, and neither switch has been tried on a cluster. From `install` to `reuse` removes nothing, because
+the apps sync without pruning: the pattern's operator Namespaces, OperatorGroups and Subscriptions stay but are no
+longer updated, and its `nfd-config` and `nvidia-gpu-config` apps stay and keep applying its NodeFeatureDiscovery and
+ClusterPolicy from Git, so the pattern's ClusterPolicy still follows your fork. Deleting those two apps deletes the
+NodeFeatureDiscovery and the ClusterPolicy with them. From `reuse` to `install` adds a second copy of both operators
+next to the cluster's.
 
 ## Quick start
 
