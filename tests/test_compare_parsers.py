@@ -1806,6 +1806,9 @@ def test_the_plan_check_reads_the_gpu_nodes_once_and_names_what_they_offer():
             "nvidia.com/gpu allocatable") in text and "cpu-1" not in text
     assert "time-slicing (not MPS) with 2 shares (timeSlicing.enabled: true, replicas: 2, in " in text
     assert "charts/all/nvidia-gpu-config/values.yaml" in text
+    # With global.gpuOperators reuse the pattern's chart does nothing: the hint names the cluster's own ClusterPolicy.
+    assert ("with global.gpuOperators reuse, in the cluster's own ClusterPolicy's devicePlugin.config, with "
+            "renameByDefault: false") in text
     assert cluster.calls == [("GET", "/api/v1/nodes")]
     with pytest.raises(plans.PlanError, match="sharing strategy mps, 2 nvidia.com/gpu allocatable.*not MPS"):
         FakeCluster(labels={kube.GPU_SHARING_LABEL: "mps"}).backend().check_plan(shared)

@@ -547,7 +547,8 @@ class KubeBackend:
         if short and shared:
             hint = (f"offer the shares to pods as {WHOLE_GPU_RESOURCE}: a node whose labels fit offers fewer than 2, "
                     f"as when the device plugin renames time-sliced shares to {WHOLE_GPU_RESOURCE}.shared "
-                    "(renameByDefault: true; charts/all/nvidia-gpu-config sets it to false) or is still restarting "
+                    "(renameByDefault: true; charts/all/nvidia-gpu-config sets it to false, and with "
+                    "global.gpuOperators reuse the cluster's own ClusterPolicy decides) or is still restarting "
                     "after a time-slicing change (wait for it and run again)")
         elif short:
             hint = (f"use a node that offers at least 2 {WHOLE_GPU_RESOURCE} to pods: a node whose labels fit offers "
@@ -555,7 +556,8 @@ class KubeBackend:
                     "(wait for it and run again)")
         elif shared:
             hint = ("turn on GPU time-slicing (not MPS) with 2 shares (timeSlicing.enabled: true, replicas: 2, in "
-                    "charts/all/nvidia-gpu-config/values.yaml) on a node with one GPU")
+                    "charts/all/nvidia-gpu-config/values.yaml; with global.gpuOperators reuse, in the cluster's own "
+                    "ClusterPolicy's devicePlugin.config, with renameByDefault: false) on a node with one GPU")
         else:
             hint = ("use a node with two GPUs or more and no GPU sharing (no time-slicing, no MPS), or set "
                     "scaleOut.sharedGpu: true")
