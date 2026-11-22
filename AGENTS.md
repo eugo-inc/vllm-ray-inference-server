@@ -356,9 +356,10 @@ and uses a serving certificate; the Route uses `reencrypt` termination.
   order check, the reasons and their order, `max_cases` and `must_agree` (on top of the sign test). pairbench's own
   pairing, floor, rule and `analyse` are not used. There is no fallback: without pairbench, `rhvp_compare.stats` does
   not import. `tests/test_compare_stats.py` holds the three adapters to the pattern's earlier formulas on a grid of
-  inputs and checks that they reach pairbench. Re-analyzing the repository's synthetic results and 95 results files of
-  earlier runs of the runner (kept outside the repository) with the earlier and the new code gave byte-identical
-  `results.json` and `results.md`, on Python 3.12 and 3.13, and so did every analysis the unit tests make.
+  inputs and checks that they reach pairbench. Re-analyzing the repository's synthetic results and the results of 33
+  earlier runs of the runner with real servers (39 distinct files, kept outside the repository) with the earlier and
+  the new code gave byte-identical `results.json` and `results.md`, on Python 3.12 and 3.13, and so did every analysis
+  the unit tests make.
 - `notebooks/rhvp_compare/analyze.py` is the boundary to the statistics: `inputs(results)` turns `plan` and
   `launches` into plain rows (round, position, side, case, value), the twin map, the cases and the failed launches;
   `analyse(...)` turns those into `analysis` (`rule`, `comparisons`, `same_vs_same`, `nonpositive_twins`,
