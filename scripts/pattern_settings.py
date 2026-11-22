@@ -1,14 +1,18 @@
 # SPDX-License-Identifier: Apache-2.0
-"""The scale-out settings and their rules, for scripts/validate-values.sh and the tests.
+"""The scale-out settings, the GPU operator setting and their rules, for scripts/validate-values.sh and the tests.
 
-The same rules fail a chart render: charts/all/ray-serve-llm/templates/_settings.tpl for the server chart's values
-and global.scaleOut (templates/scaledobject.yaml for the keda trigger's own settings), and
-charts/all/notebook/templates/_helpers.tpl (notebook.compareConfig) for global.compare.mode. Keep them in step;
-tests/test_scaleout_contract.py checks that a render and this module give the same message for the same mistake.
+The same rules fail a chart render: charts/all/ray-serve-llm/templates/_settings.tpl for the server chart's values,
+global.scaleOut and global.gpuOperators (templates/scaledobject.yaml for the keda trigger's own settings; the server
+chart refuses global.gpuOperators because it always renders, and `check_gpu_config` holds that rule here),
+charts/all/notebook/templates/_helpers.tpl (notebook.compareConfig) for global.compare.mode, and
+charts/all/nvidia-gpu-config/templates/time-slicing-config.yaml for time-slicing with global.gpuOperators reuse. Keep
+them in step; tests/test_scaleout_contract.py checks that a render and this module give the same message for the same
+mistake.
 
 `check(values)` takes the server chart's values as Helm sees them: charts/all/ray-serve-llm/values.yaml with
-values-global.yaml, the variant file and the override files merged over it. It returns one message per broken rule,
-or an empty list. Standard library only.
+values-global.yaml, the variant file and the override files merged over it. `check_gpu_config(values)` takes the
+GPU chart's values the same way (charts/all/nvidia-gpu-config/values.yaml under the same files). Each returns one
+message per broken rule, or an empty list. Standard library only.
 """
 
 from __future__ import annotations
@@ -22,6 +26,15 @@ from decimal import Decimal
 SCALE_OUT_MODES = ("none", "keda")
 #: global.compare.mode values; levels is the default.
 COMPARE_MODES = ("levels", "scaleout")
+#: global.gpuOperators values; install is the one in values-global.yaml. Every other value, and none, names an override
+#: file that does not exist, so the install gets neither GPU operator: there is no default.
+GPU_OPERATORS = ("install", "reuse")
+GPU_OPERATORS_REFUSED = ("global.gpuOperators must be install or reuse; got {value} (any other value, or none, "
+                         "installs neither Node Feature Discovery nor the NVIDIA GPU Operator)")
+#: GPU time-slicing is a setting of the pattern's own ClusterPolicy, which only global.gpuOperators install creates.
+TIME_SLICING_REUSE = ("timeSlicing.enabled needs global.gpuOperators install: with reuse the pattern creates no "
+                      "ClusterPolicy and does not change the cluster's own, so set up time-slicing in that "
+                      "ClusterPolicy's devicePlugin.config instead")
 #: compileCache.mode values; none is the default.
 COMPILE_CACHE_MODES = ("none", "node", "shared")
 #: modelStorage.accessMode values; ReadWriteOnce is the default.
@@ -264,6 +277,19 @@ def _check_trigger(pods: Mapping) -> list[str]:
     if not (isinstance(url, str) and re.match(r"https?://[^/]+", url)):
         out.append(f"scaleOut.thanosUrl must be an http:// or https:// address; got {_show(url)}")
     return out
+
+
+def check_gpu_config(values: Mapping) -> list[str]:
+    """global.gpuOperators (install or reuse, as the server chart's render refuses any other value or none), and no
+    time-slicing with reuse. `values` is charts/all/nvidia-gpu-config/values.yaml with the case's values files merged
+    over it. With reuse the cluster renders no app for that chart, so this check and render-charts.sh are the only
+    places that refuse time-slicing then."""
+    operators = (values.get("global") or {}).get("gpuOperators")
+    if not (isinstance(operators, str) and operators in GPU_OPERATORS):
+        return [GPU_OPERATORS_REFUSED.format(value=_show(operators))]
+    if operators == "reuse" and (values.get("timeSlicing") or {}).get("enabled"):
+        return [TIME_SLICING_REUSE]
+    return []
 
 
 def check(values: Mapping) -> list[str]:

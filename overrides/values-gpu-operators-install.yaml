@@ -1,0 +1,58 @@
+# Included through clusterGroup.sharedValueFiles in variants/prod/values-prod.yaml
+# only when global.gpuOperators is "install" (values-global.yaml), the default.
+#
+# What it does: installs Node Feature Discovery and the NVIDIA GPU Operator, for a
+# cluster that runs neither:
+#   - their namespaces, openshift-nfd and nvidia-gpu-operator, each with an
+#     OperatorGroup that targets only its own namespace (what both operators
+#     support);
+#   - their Subscriptions: nfd (redhat-operators, channel stable) and
+#     gpu-operator-certified (certified-operators, channel stable);
+#   - the apps nfd-config (charts/all/nfd-config, a NodeFeatureDiscovery) and
+#     nvidia-gpu-config (charts/all/nvidia-gpu-config, a ClusterPolicy).
+#
+# With global.gpuOperators: reuse this file is not included: the pattern creates
+# none of the above and uses the operators the cluster already runs (README,
+# "Reuse the cluster's GPU operators"). Any other value names a file that does
+# not exist, so it installs neither operator either, and the server chart refuses
+# the value (charts/all/ray-serve-llm/templates/_settings.tpl).
+#
+# Only maps here: maps merge across values files, so this file adds to the
+# namespaces, subscriptions and applications of variants/prod/values-prod.yaml.
+clusterGroup:
+  namespaces:
+    openshift-nfd:
+    nvidia-gpu-operator:
+      # Lets the cluster's own monitoring scrape the GPU Operator's DCGM exporter
+      # (its ServiceMonitor), as NVIDIA's OpenShift guide says. The image
+      # comparison reads GPU power from there.
+      labels:
+        openshift.io/cluster-monitoring: "true"
+
+  subscriptions:
+    nfd:
+      name: nfd
+      namespace: openshift-nfd
+      channel: stable
+    nvidia:
+      name: gpu-operator-certified
+      namespace: nvidia-gpu-operator
+      source: certified-operators
+      channel: stable
+
+  # Application keys equal the chart folder names under charts/all/.
+  applications:
+    nfd-config:
+      name: nfd-config
+      namespace: openshift-nfd
+      path: charts/all/nfd-config
+      ignoreDifferences:
+        - group: nfd.openshift.io
+          kind: NodeFeatureDiscovery
+          jqPathExpressions:
+            - '.spec.customConfig'
+            - '.spec.topologyupdater'
+    nvidia-gpu-config:
+      name: nvidia-gpu-config
+      namespace: nvidia-gpu-operator
+      path: charts/all/nvidia-gpu-config

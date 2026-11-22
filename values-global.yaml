@@ -20,6 +20,24 @@ global:
   # the job but does not delete a machine that was already created.
   gpuMachineSet: create
 
+  # Node Feature Discovery and the NVIDIA GPU Operator. One of:
+  #   install - the install adds both operators: their namespaces
+  #             (openshift-nfd, nvidia-gpu-operator), OperatorGroups and
+  #             Subscriptions, a NodeFeatureDiscovery and a ClusterPolicy
+  #             (overrides/values-gpu-operators-install.yaml). For a cluster
+  #             that runs neither operator.
+  #   reuse   - the install adds none of that and uses the two operators the
+  #             cluster already runs, as an OpenShift AI GPU cluster does. It
+  #             does not change, label or delete them; README, "Reuse the
+  #             cluster's GPU operators", lists what they must provide. Not yet
+  #             run on a cluster.
+  # Any other value, or none, installs neither operator, and the server's app
+  # fails to render with a message that names this setting.
+  # Set it in your fork BEFORE you install. Switching a running install is not
+  # supported: install to reuse removes nothing (the apps sync without pruning),
+  # and reuse to install adds a second copy of both operators.
+  gpuOperators: install
+
   # The model the server loads from Hugging Face.
   model:
     # Name clients put in the "model" field of OpenAI-style requests.
