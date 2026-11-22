@@ -975,8 +975,8 @@ Then run these, all from the repo root:
 | `python3.12 -m pytest -q tests/` | runs the unit tests | anywhere; the chart tests (those that use the render in `tests/conftest.py`) are skipped without docker or podman and access to charts.validatedpatterns.io |
 | `python3.12 notebooks/make_notebook.py --check` | regenerates both notebooks and their synthetic files and fails if one differs from the committed file | anywhere |
 | `scripts/local-smoke.sh` | builds the server image and serves the model with docker | a machine with an NVIDIA GPU only |
-| `scripts/compare-local.sh tests/fixtures/compare-local-mock.json <folder>` | the image comparison with docker, against two GuideLLM mock servers | needs docker and access to PyPI (pairbench); GPU sides need an NVIDIA GPU |
-| `scripts/compare-local.sh tests/fixtures/compare-scaleout-mock.json <folder>` | the comparison's scale-out mode with docker, against GuideLLM mock servers that take a while to start | needs docker and access to PyPI (pairbench); no GPU |
+| `scripts/compare-local.sh tests/fixtures/compare-local-mock.json <folder>` | the image comparison with docker, against two GuideLLM mock servers | needs docker and access to PyPI or a mirror (pairbench); GPU sides need an NVIDIA GPU |
+| `scripts/compare-local.sh tests/fixtures/compare-scaleout-mock.json <folder>` | the comparison's scale-out mode with docker, against GuideLLM mock servers that take a while to start | needs docker and access to PyPI or a mirror (pairbench); no GPU |
 | `python3.12 -m rhvp_compare validate --config <file>` (from `notebooks/`) | checks a comparison config and prints every round's order, the server starts and whether the rounds can give a verdict | anywhere |
 
 ## Bumping Ray and vLLM

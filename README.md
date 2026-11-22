@@ -674,7 +674,9 @@ docker on one machine with an NVIDIA GPU, with GPU power sampled by `nvidia-smi`
 - pairbench, which the GuideLLM image the runner runs in does not have, is installed for each run from
   `notebooks/requirements-compare.lock`: pip, in a throwaway container of that image, downloads it from PyPI, checks
   its hash and installs it, alone, into a temporary folder that the runner mounts read-only. So the machine needs
-  access to PyPI; without it the script stops with exit 3 before the runner starts.
+  access to PyPI, or to a mirror or proxy: `PIP_INDEX_URL`, `PIP_EXTRA_INDEX_URL`, `PIP_TRUSTED_HOST` and the proxy
+  variables (`HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY`, upper or lower case), where set, are passed into that
+  container. A failed install stops the script with exit 3 before the runner starts, after pip's own message.
 - `SIDE_MEMORY` (for example `32g`) and `RUNNER_MEMORY` (default `8g`) limit the containers' memory. On a GPU whose
   memory is the machine's own, also lower `server.gpuMemoryUtilization` in the config: it is a share of all of it.
 - The runner container may hold 65536 open files (`--ulimit nofile=65536:65536`, soft and hard; docker's default soft

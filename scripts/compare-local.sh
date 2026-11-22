@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Compare two inference-server images on one machine with docker, no cluster: the same runner, launches, GuideLLM
 # load and analysis as the OpenShift Job (see README, "Compare two images"), with GPU power from nvidia-smi instead
-# of DCGM. Needs docker, access to PyPI for pairbench (step 2 below) and, for GPU sides, one NVIDIA GPU with the
-# NVIDIA Container Toolkit; nothing else on the host.
+# of DCGM. Needs docker, access to PyPI (or a mirror) for pairbench (step 2 below) and, for GPU sides, one NVIDIA
+# GPU with the NVIDIA Container Toolkit; nothing else on the host.
 #
 #   scripts/compare-local.sh <config.json> <results folder>
 #
@@ -15,9 +15,10 @@
 #   1. Creates the docker network $NETWORK if it is missing.
 #   2. Installs pairbench (the comparison's sign test, Holm's correction and fewest rounds), which the GuideLLM
 #      image does not have, from notebooks/requirements-compare.lock: pip in a throwaway container of the GuideLLM
-#      image downloads it from PyPI, checks its hash, and installs it into a new temporary folder, removed when the
-#      script ends. No other package is installed. A failed install stops the script with exit 3 before the runner
-#      starts.
+#      image downloads it from PyPI (or the mirror or proxy that PIP_INDEX_URL, HTTPS_PROXY and the like name, passed
+#      in when set), checks its hash, and installs it into a new temporary folder, removed when the script ends. No
+#      other package is installed. A failed install stops the script with exit 3 before the runner starts; pip's own
+#      message above it says why.
 #   3. Runs the runner (notebooks/rhvp_compare, and that folder, both mounted read-only) in a container of the
 #      GuideLLM image on that network, with the docker socket mounted. The runner starts each side and the nvidia-smi
 #      sampler as sibling containers on the same network, one launch at a time, and runs GuideLLM as its own child
@@ -117,15 +118,21 @@ ulimit_flag=()
 
 # pairbench for the runner (step 2 above): hash-checked, wheels only, nothing else, into a folder of its own.
 # NVIDIA_VISIBLE_DEVICES=void keeps a GPU out of this container where docker's default runtime is NVIDIA's.
+# pip's index and proxy settings, where set, go into it, for a machine that reaches PyPI through a mirror or a proxy.
 PYTHON_DEPS="$(mktemp -d "${TMPDIR:-/tmp}/rhvp-compare-pairbench.XXXXXX")"
 trap 'rm -rf "$PYTHON_DEPS"' EXIT
-docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -e NVIDIA_VISIBLE_DEVICES=void \
+pip_env=()
+for name in PIP_INDEX_URL PIP_EXTRA_INDEX_URL PIP_TRUSTED_HOST HTTPS_PROXY https_proxy HTTP_PROXY http_proxy \
+  NO_PROXY no_proxy; do
+  [ -z "${!name:-}" ] || pip_env+=(-e "$name")
+done
+docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -e NVIDIA_VISIBLE_DEVICES=void "${pip_env[@]}" \
   -v "$REPO/notebooks/requirements-compare.lock:/requirements-compare.lock:ro" \
   -v "$PYTHON_DEPS:/deps" \
   --entrypoint python "$LOAD_IMAGE" \
   -m pip install --disable-pip-version-check --no-cache-dir --no-deps --only-binary :all: --require-hashes \
   --target /deps -r /requirements-compare.lock >&2 \
-  || { echo "could not install pairbench from notebooks/requirements-compare.lock (needs access to PyPI)" >&2; exit 3; }
+  || { echo "could not install pairbench from notebooks/requirements-compare.lock (pip says why above)" >&2; exit 3; }
 
 docker run --rm --name "$RUNNER_NAME" --network "$NETWORK" \
   --label rhvp-compare.runner=1 --memory "$RUNNER_MEMORY" --stop-timeout "$STOP_TIMEOUT" --init \
