@@ -273,9 +273,9 @@ def test_the_helm_loader_reads_every_values_file_as_before():
         assert yaml.load(text, Loader=HELM_LOADER) == yaml.safe_load(text), path
 
 
-def validate_values(tmp_path, rel: str, old: str, new: str) -> subprocess.CompletedProcess:
-    """scripts/validate-values.sh on a copy of the repo with `old` replaced by `new` in `rel` (needs its pinned
-    schemas from the network: skips without them)."""
+def validate_values(tmp_path, rel: str, old: str, new: str, also=()) -> subprocess.CompletedProcess:
+    """scripts/validate-values.sh on a copy of the repo with `old` replaced by `new` in `rel`, and each further
+    (rel, old, new) in `also` (needs its pinned schemas from the network: skips without them)."""
     copy_root = tmp_path / "repo"
     for name in subprocess.run(["git", "ls-files"], cwd=REPO, capture_output=True, text=True,
                                check=True).stdout.split():
@@ -285,9 +285,10 @@ def validate_values(tmp_path, rel: str, old: str, new: str) -> subprocess.Comple
     for name in ("scripts/pattern_settings.py", "scripts/validate-values.sh", "values-global.yaml",
                  "charts/all/ray-serve-llm/values.yaml"):
         shutil.copy(REPO / name, copy_root / name)
-    text = (copy_root / rel).read_text()
-    assert text.count(old) == 1
-    (copy_root / rel).write_text(text.replace(old, new))
+    for path, before, after in ((rel, old, new), *also):
+        text = (copy_root / path).read_text()
+        assert text.count(before) == 1
+        (copy_root / path).write_text(text.replace(before, after))
     proc = subprocess.run([str(copy_root / "scripts/validate-values.sh")], capture_output=True, text=True,
                           env={**os.environ, "PYTHON": sys.executable}, timeout=300)
     if "sha256" in proc.stderr or "urlopen" in proc.stderr or "URLError" in proc.stderr:
@@ -310,14 +311,36 @@ def test_gpu_operator_check_runs_in_validate_values(tmp_path):
     assert "GPU operator settings, AWS: global.gpuOperators must be install or reuse; got Reuse" in proc.stderr
 
 
+TIME_SLICING_ON = ("charts/all/nvidia-gpu-config/values.yaml", "timeSlicing:\n  enabled: false\n",
+                   "timeSlicing:\n  enabled: true\n")
+
+
+def test_time_slicing_with_install_passes_validate_values(tmp_path):
+    """With global.gpuOperators install (the default), time-slicing is the documented way to fit two server pods on
+    one GPU: the reuse cases that validate-values.sh adds itself must not refuse it."""
+    proc = validate_values(tmp_path, *TIME_SLICING_ON)
+    assert proc.returncode == 0, proc.stderr
+    assert "ok   GPU operator settings, AWS, gpuOperators=reuse" in proc.stdout
+
+
 def test_time_slicing_with_reuse_is_refused_in_validate_values(tmp_path):
     """With global.gpuOperators reuse the cluster renders no app for the GPU chart, so validate-values.sh refuses its
-    time-slicing, which would otherwise silently not happen. The reuse cases are part of every run."""
-    proc = validate_values(tmp_path, "charts/all/nvidia-gpu-config/values.yaml", "timeSlicing:\n  enabled: false\n",
-                           "timeSlicing:\n  enabled: true\n")
+    time-slicing, which would otherwise silently not happen."""
+    proc = validate_values(tmp_path, "values-global.yaml", "  gpuOperators: install\n", "  gpuOperators: reuse\n",
+                           also=[TIME_SLICING_ON])
     assert proc.returncode == 1
-    assert f"GPU operator settings, AWS, gpuOperators=reuse: {pattern_settings.TIME_SLICING_REUSE}" in proc.stderr
-    assert "GPU operator settings, AWS: " not in proc.stderr  # with install, time-slicing is the chart's to apply
+    assert f"GPU operator settings, AWS: {pattern_settings.TIME_SLICING_REUSE}" in proc.stderr
+    # The install file is still used, by the cases with the other value.
+    assert "no sharedValueFiles entry includes it" not in proc.stderr
+    assert "ok   GPU operator settings, AWS, gpuOperators=install" in proc.stdout
+
+
+def test_reuse_in_values_global_passes_validate_values(tmp_path):
+    """A fork that sets global.gpuOperators reuse passes; the cases with the other value still use the install
+    file."""
+    proc = validate_values(tmp_path, "values-global.yaml", "  gpuOperators: install\n", "  gpuOperators: reuse\n")
+    assert proc.returncode == 0, proc.stderr
+    assert "ok   GPU operator settings, AWS, gpuOperators=install, scaleOut.mode=keda" in proc.stdout
 
 
 @pytest.mark.parametrize("written, refusal", [

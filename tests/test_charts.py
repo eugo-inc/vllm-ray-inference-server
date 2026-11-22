@@ -567,7 +567,9 @@ def test_reuse_creates_nothing_of_the_gpu_operators(cg, install, reuse):
         assert without_operators_file(a[key]) == without_operators_file(b[key]), key
     assert not [d for d in cg[reuse] if d["kind"] in ("NodeFeatureDiscovery", "ClusterPolicy")]
     text = json.dumps(cg[reuse])
-    assert "values-gpu-operators-install" not in text and "openshift-nfd" not in text
+    for name in ("values-gpu-operators-install", "openshift-nfd", "nvidia-gpu-operator", "nfd-instance",
+                 "nvidia-gpu-cluster-policy"):
+        assert name not in text, name
     # The file reuse names does not exist, so every Application gets no values from it.
     assert not (REPO / "overrides/values-gpu-operators-reuse.yaml").exists()
     if reuse == "reuse-keda":
@@ -575,15 +577,19 @@ def test_reuse_creates_nothing_of_the_gpu_operators(cg, install, reuse):
 
 
 def test_reuse_changes_no_local_chart(render):
-    # global.gpuOperators decides only what the app of apps creates; every chart renders as with install (the
-    # notebook's cookie secret is random on every render). The cluster has no app for nfd-config and
-    # nvidia-gpu-config in reuse mode at all.
+    # global.gpuOperators decides only what the app of apps creates; every chart the cluster still renders with
+    # reuse renders as with install (the notebook's cookie secret is random on every render). The cluster has no
+    # app for nfd-config and nvidia-gpu-config then, and render-charts.sh does not render them for reuse.
     def text(path):
         return re.sub(r'session_secret: ".*"', "session_secret: X", path.read_text())
 
-    for chart in (REPO / "charts/all").iterdir():
-        name = chart.name
+    operators = {"nfd-config", "nvidia-gpu-config"}
+    charts = {chart.name for chart in (REPO / "charts/all").iterdir()}
+    assert operators < charts
+    for name in sorted(charts - operators):
         assert text(render / f"charts/{name}-reuse.yaml") == text(render / f"charts/{name}.yaml"), name
+    for name in operators:
+        assert not (render / f"charts/{name}-reuse.yaml").exists(), name
 
 
 def test_gpu_operator_refusals(render):

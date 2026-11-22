@@ -27,9 +27,10 @@
 #   charts/<chart>-keda.yaml     every chart with global.scaleOut.mode=keda and that case's
 #                                values files, and notebook-compare-keda.yaml with the
 #                                comparison on too
-#   charts/<chart>-reuse.yaml    every chart with global.gpuOperators=reuse and that case's
-#                                values files (the cluster then has no app for nfd-config and
-#                                nvidia-gpu-config; the tests check the charts render as before)
+#   charts/<chart>-reuse.yaml    every chart the cluster still renders with
+#                                global.gpuOperators=reuse (not nfd-config and nvidia-gpu-config,
+#                                which then have no app), with that case's values files; the
+#                                tests check they render as with install
 #   refused/<case>.txt           helm's error for each setting the charts must refuse (the
 #                                script fails if one renders, or fails without its message)
 #   clustergroup/<case>.yaml     the clustergroup chart (the app of apps) for:
@@ -200,7 +201,8 @@ helm template notebook charts/all/notebook --namespace vllm-notebook "${FARGS[@]
   --set-json 'global.compare.passThrough={"nested":{"rate":2.5,"names":["a","b"]}}' \
   > "${RENDER_DIR}/charts/notebook-compare-scaleout.yaml"
 helm template nvidia-gpu-config charts/all/nvidia-gpu-config --namespace nvidia-gpu-operator "${FARGS[@]}" "${SETS[@]}" \
-  --set timeSlicing.enabled=true > "${RENDER_DIR}/charts/nvidia-gpu-config-timeslicing.yaml"
+  --set timeSlicing.enabled=true --set global.gpuOperators=install \
+  > "${RENDER_DIR}/charts/nvidia-gpu-config-timeslicing.yaml"
 helm template nvidia-gpu-config charts/all/nvidia-gpu-config --namespace nvidia-gpu-operator "${FARGS[@]}" \
   "${SETS[@]}" --set global.compare.enabled=true > "${RENDER_DIR}/charts/nvidia-gpu-config-compare.yaml"
 helm template nvidia-gpu-config charts/all/nvidia-gpu-config --namespace nvidia-gpu-operator "${FARGS[@]}" \
@@ -295,7 +297,7 @@ refuse keda-thanos-url ray-serve-llm vllm-inference "scaleOut.thanosUrl must be 
 refuse keda-cooldown ray-serve-llm vllm-inference "scaleOut.cooldownSeconds must be a whole number from 0 to 3600" \
   --set global.scaleOut.mode=keda --set scaleOut.cooldownSeconds=7200
 refuse timeslicing-replicas nvidia-gpu-config nvidia-gpu-operator "timeSlicing.replicas must be a whole number of at least 2" \
-  --set timeSlicing.enabled=true --set timeSlicing.replicas=1
+  --set timeSlicing.enabled=true --set timeSlicing.replicas=1 --set global.gpuOperators=install
 # global.gpuOperators: a value that names no override file, or none, would install neither GPU operator.
 refuse gpu-operators-unknown ray-serve-llm vllm-inference "global.gpuOperators must be install or reuse; got Reuse" \
   --set global.gpuOperators=Reuse
@@ -321,11 +323,14 @@ helm template notebook charts/all/notebook --namespace vllm-notebook "${FARGS[@]
   --set global.scaleOut.mode=keda --set global.compare.enabled=true > "${RENDER_DIR}/charts/notebook-compare-keda.yaml"
 echo "rendered charts/*-keda.yaml with: ${FILES[*]}"
 
-# global.gpuOperators=reuse, with the values files the operator includes in that case.
+# global.gpuOperators=reuse, with the values files the operator includes in that case. The cluster then has no app
+# for nfd-config and nvidia-gpu-config, so they are not rendered here (the reuse-timeslicing refusal covers the
+# GPU chart).
 value_files AWS --set global.gpuOperators=reuse
 operator_sets AWS
 for entry in "${CHARTS[@]}"; do
   chart="${entry%%:*}" ns="${entry#*:}"
+  case "${chart}" in nfd-config | nvidia-gpu-config) continue ;; esac
   helm lint --strict "charts/all/${chart}" --namespace "${ns}" "${FARGS[@]}" "${SETS[@]}" \
     --set global.gpuOperators=reuse
   helm template "${chart}" "charts/all/${chart}" --namespace "${ns}" "${FARGS[@]}" "${SETS[@]}" \
