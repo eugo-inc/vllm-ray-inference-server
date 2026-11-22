@@ -1010,8 +1010,9 @@ pairbench (https://github.com/eugo-inc/pairbench) gives the comparison its sign 
 rounds ("How the image comparison runs"). For a new version:
 
 1. `notebooks/requirements-compare.in`: set `pairbench==<version>`. Regenerate both locks from `notebooks/` with the
-   commands in their headers (`requirements-compare.lock`, then `requirements.lock`, which takes the first file in), and
-   check that the only change in `requirements.lock` is pairbench's stanza. A test keeps the two locks' pins equal.
+   commands in their headers (`requirements-compare.lock`, then `requirements.lock`, whose `requirements.in` takes in
+   `requirements-compare.in`), and check that the only change in `requirements.lock` is pairbench's stanza. A test
+   keeps the two locks' pins equal.
 2. `charts/all/notebook/templates/compare-job.yaml`: the `pairbench-<version>.dist-info` folder the init container
    copies. `tests/test_charts.py` checks it against the lock.
 3. Check that `pairbench.stats.sign_test`, `holm` and `min_rounds` still mean what `rhvp_compare/stats.py` says, run
