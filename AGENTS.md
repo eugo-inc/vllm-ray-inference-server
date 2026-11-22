@@ -691,11 +691,13 @@ cluster's (a second OperatorGroup in their namespace, and their Subscription and
 where the names match the pattern's). The server chart, which always renders, refuses any value other than `install`
 or `reuse`, and a missing one (`_settings.tpl`; no default in its `values.yaml`, which would hide a missing key);
 `scripts/pattern_settings.py` (`check_gpu_config`, through `scripts/validate-values.sh`) refuses the same with the
-same message, and refuses `timeSlicing.enabled` with `reuse`, as does the GPU chart's own render
-(`templates/time-slicing-config.yaml`). The cluster renders no app for that chart with `reuse`, so on the cluster
-the time-slicing setting would silently do nothing; only those two local checks catch it. With `reuse` every local
-chart renders exactly as with `install`, and the app of apps differs by exactly the eight objects in the names
-table's "GPU operators" row (`tests/test_charts.py`).
+same message. With `reuse` in `values-global.yaml` it also refuses `timeSlicing.enabled`, as does the GPU chart's
+own render (`templates/time-slicing-config.yaml`); the two cases `validate-values.sh` adds with the other value
+(`reuse` when `values-global.yaml` says `install`) leave time-slicing out, since with `install` it is the way to fit
+two server pods on one GPU. The cluster renders no app for that chart with `reuse`, so on the cluster the
+time-slicing setting would silently do nothing; only those two local checks catch it. With `reuse` every chart the
+cluster still renders (all but `nfd-config` and `nvidia-gpu-config`) renders exactly as with `install`, and the app
+of apps differs by exactly the eight objects in the names table's "GPU operators" row (`tests/test_charts.py`).
 
 What the cluster's installs must provide is in the README, "Reuse the cluster's GPU operators": NFD labeling the GPU
 nodes; a ready ClusterPolicy with a driver of 580 or newer, tolerating the GPU nodes' taints, labeling them
