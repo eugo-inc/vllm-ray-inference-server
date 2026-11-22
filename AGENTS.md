@@ -102,6 +102,7 @@ inference-server/              Containerfile, requirements.in, requirements-pip.
                                requirements-x86_64.lock, requirements-aarch64.lock, serve_app.py, entrypoint.sh,
                                rhvp_status.py, rhvp_scale.py (the rhvp-scale log line's shape)
 notebooks/                     Containerfile, entrypoint.sh, .dockerignore, requirements.in, requirements.lock,
+                               requirements-compare.in, requirements-compare.lock (pairbench, for the comparison),
                                make_notebook.py, rhvp_bench/ (words, draw, showing, measure, replay, prompts,
                                run), prompts.jsonl, recordings/synthetic.json,
                                inference_timings.ipynb (generated)
@@ -269,8 +270,11 @@ and uses a serving certificate; the Route uses `reencrypt` termination.
 - Off by default. `global.compare` in `values-global.yaml` is the config; the notebook chart renders it, plus
   `global.model`, into ConfigMap `image-compare-config-<hash>`, and renders the Job and its RBAC.
 - The Job's pod runs on the pinned GuideLLM image (`ghcr.io/vllm-project/guidellm:v0.8.1@sha256:015b...`); an init
-  container copies `notebooks/rhvp_compare` into it from the notebook image. It runs on the notebook pod's node,
-  because the results PVC is ReadWriteOnce and the notebook mounts it too.
+  container copies `notebooks/rhvp_compare` into it from the notebook image, with pairbench as that image installed it
+  (`/opt/app-root/lib/python3.12/site-packages/pairbench` and its `pairbench-<version>.dist-info`; pure Python, run
+  by the GuideLLM image's own Python 3.13). A notebook image built before pairbench was added (or an `image.override`
+  without it) fails that init container, and the Job with it. It runs on the notebook pod's node, because the results
+  PVC is ReadWriteOnce and the notebook mounts it too.
 - The runner (`python -m rhvp_compare run --backend kube`) first lists the runner pods in `vllm-notebook`
   (`app.kubernetes.io/name=image-compare`) and refuses to start (exit 5, `RUN_ACTIVE`, nothing changed) while an
   older one is Pending or Running. It then scales Deployment `ray-serve-llm` to 0, and for each launch creates a
@@ -343,6 +347,18 @@ and uses a serving certificate; the Route uses `reencrypt` termination.
   `nonpositive_value` (a 0 on A or B in any round, paired or not, or in a side's pair with its twin, which takes the
   side's floor on that whole floor group), `single_measurement`, `too_few_rounds` (`stats.min_rounds` of the primary
   family, or of one case for a secondary), `no_floor`, `one_sided_floor`, `zero_floor`. There is no fixed tie band.
+- What comes from pairbench (https://github.com/eugo-inc/pairbench): the exact sign test, Holm's correction and the
+  fewest rounds (`stats.sign_test`, `stats.holm` and `stats.min_rounds` call `pairbench.stats.sign_test`, `holm` and
+  `min_rounds`), pinned in `notebooks/requirements-compare.lock`. The adapters keep the pattern's arguments and
+  results: `holm` hands pairbench the p-values sorted by case id, so its ties fall in the pattern's order, and
+  `min_rounds` still counts fewer than 1 case as 1, which pairbench refuses. Everything else is the pattern's own: the
+  per-round ratios and their median, the signs (a ratio of exactly 1 is a tie), the floors and the bar, `grade`, the
+  order check, the reasons and their order, `max_cases` and `must_agree` (on top of the sign test). pairbench's own
+  pairing, floor, rule and `analyse` are not used. There is no fallback: without pairbench, `rhvp_compare.stats` does
+  not import. `tests/test_compare_stats.py` holds the three adapters to the pattern's earlier formulas on a grid of
+  inputs and checks that they reach pairbench. Re-analyzing the repository's synthetic results and 95 results files of
+  earlier runs of the runner (kept outside the repository) with the earlier and the new code gave byte-identical
+  `results.json` and `results.md`, on Python 3.12 and 3.13, and so did every analysis the unit tests make.
 - `notebooks/rhvp_compare/analyze.py` is the boundary to the statistics: `inputs(results)` turns `plan` and
   `launches` into plain rows (round, position, side, case, value), the twin map, the cases and the failed launches;
   `analyse(...)` turns those into `analysis` (`rule`, `comparisons`, `same_vs_same`, `nonpositive_twins`,
@@ -400,8 +416,9 @@ comparison code of an earlier commit of `main`, upstream `vllm/vllm-openai` v0.3
 builds from `inference-server/` (B, preset `ray-serve-llm`, vLLM 0.29.0, from the internal registry), one warm-up launch
 per side and 2 rounds, 30 s at 1 and 8 streams (6 launches in 29 minutes; B's `engine_restarts`, which only a
 `ray-serve-llm` side counts, 0 in each); mode `levels` with upstream vLLM v0.32.0 and v0.33.0, 1 round without a
-warm-up, 30 s at each of 1, 4, 8, 16, 32 and 64 streams (21 minutes); and mode `scaleout` with the current code ("How
-scale out works"). In each, Argo CD created the Job, the runner pod ran under the `restricted-v2` SCC, the server went
+warm-up, 30 s at each of 1, 4, 8, 16, 32 and 64 streams (21 minutes); and mode `scaleout` with the code as it
+stood just before the statistics came from pairbench ("How scale out works"). In each, Argo CD created the Job, the
+runner pod ran under the `restricted-v2` SCC, the server went
 to 0 and back to one Ready pod, and no side pod was left. The `notebook` app showed Progressing while a Job ran, Healthy
 once one had succeeded, and OutOfSync while an earlier run's Job and its config ConfigMap were still there (no pruning).
 Both `levels` runs got tokens per joule from DCGM for every scored level (8 and 12), each from the energy counter with
@@ -576,7 +593,8 @@ each part:
   that name. Before the first request Thanos had no series for it (for about 45 minutes, also after the server pod was
   deleted once), and the one scrape of the pod's port came back with no `ray_vllm_` lines; why is not proven. The server
   started with the `subPath` token mount.
-- Mode `scaleout` as the OpenShift Job, with the current code, `sharedGpu: true` on that node with time-slicing on
+- Mode `scaleout` as the OpenShift Job, with the code as it stood just before the statistics came from pairbench (the
+  pattern's own sign test, Holm's correction and fewest rounds), `sharedGpu: true` on that node with time-slicing on
   (allocatable 2, `nvidia.com/gpu.count` 1, `nvidia.com/gpu.replicas` 2; the strategy label's value was not recorded
   for this node): upstream vLLM v0.32.0 (A) and v0.33.0 (B), preset `vllm-openai`, 2 rounds, no twins, no warm-up,
   53.8 requests/s for 420 s, the second replica asked for 30 s after the first request, goals of 1000 ms to the first
@@ -939,6 +957,8 @@ Install the Python tools:
 
 ```sh
 python3.12 -m pip install pytest pyyaml jsonschema nbformat nbclient nbconvert ipykernel httpx aiohttp==3.14.3
+# pairbench, which the comparison's statistics need, pinned with its hashes (as CI installs it):
+python3.12 -m pip install --no-deps --only-binary :all: --require-hashes -r notebooks/requirements-compare.lock
 ```
 
 Then run these, all from the repo root:
@@ -950,8 +970,8 @@ Then run these, all from the repo root:
 | `python3.12 -m pytest -q tests/` | runs the unit tests | anywhere; the chart tests (those that use the render in `tests/conftest.py`) are skipped without docker or podman and access to charts.validatedpatterns.io |
 | `python3.12 notebooks/make_notebook.py --check` | regenerates both notebooks and their synthetic files and fails if one differs from the committed file | anywhere |
 | `scripts/local-smoke.sh` | builds the server image and serves the model with docker | a machine with an NVIDIA GPU only |
-| `scripts/compare-local.sh tests/fixtures/compare-local-mock.json <folder>` | the image comparison with docker, against two GuideLLM mock servers | needs docker; GPU sides need an NVIDIA GPU |
-| `scripts/compare-local.sh tests/fixtures/compare-scaleout-mock.json <folder>` | the comparison's scale-out mode with docker, against GuideLLM mock servers that take a while to start | needs docker; no GPU |
+| `scripts/compare-local.sh tests/fixtures/compare-local-mock.json <folder>` | the image comparison with docker, against two GuideLLM mock servers | needs docker and access to PyPI (pairbench); GPU sides need an NVIDIA GPU |
+| `scripts/compare-local.sh tests/fixtures/compare-scaleout-mock.json <folder>` | the comparison's scale-out mode with docker, against GuideLLM mock servers that take a while to start | needs docker and access to PyPI (pairbench); no GPU |
 | `python3.12 -m rhvp_compare validate --config <file>` (from `notebooks/`) | checks a comparison config and prints every round's order, the server starts and whether the rounds can give a verdict | anywhere |
 
 ## Bumping Ray and vLLM
@@ -978,6 +998,20 @@ Ray decides the vLLM version. The `llm` extra in Ray's `python/setup.py` pins ex
    `version`, `description` and `io.k8s.description` image labels in `inference-server/Containerfile`. A test checks
    their Ray, vLLM, PyTorch and CUDA versions against the lock files. Update the versions in `README.md`, and the vLLM tag in the GPU support link below.
 7. Run the whole local loop, then `scripts/local-smoke.sh` on a GPU machine.
+
+## Bumping pairbench
+
+pairbench (https://github.com/eugo-inc/pairbench) gives the comparison its sign test, Holm's correction and fewest
+rounds ("How the image comparison runs"). For a new version:
+
+1. `notebooks/requirements-compare.in`: set `pairbench==<version>`. Regenerate both locks from `notebooks/` with the
+   commands in their headers (`requirements-compare.lock`, then `requirements.lock`, which takes the first file in), and
+   check that the only change in `requirements.lock` is pairbench's stanza. A test keeps the two locks' pins equal.
+2. `charts/all/notebook/templates/compare-job.yaml`: the `pairbench-<version>.dist-info` folder the init container
+   copies. `tests/test_charts.py` checks it against the lock.
+3. Check that `pairbench.stats.sign_test`, `holm` and `min_rounds` still mean what `rhvp_compare/stats.py` says, run
+   `tests/test_compare_stats.py`, and re-analyze recorded results with the old and the new version: the
+   `results.json` and `results.md` must not change. Then run the whole local loop.
 
 ## Rules
 
