@@ -1023,6 +1023,13 @@ rounds ("How the image comparison runs"). For a new version:
 
    Never add Eugo packages, Eugo images or Eugo registries, and never add a private package index.
 
+   One exception, and only this one: pairbench (https://github.com/eugo-inc/pairbench), Eugo's open-source
+   benchmarking tool (Apache-2.0). The image comparison takes its exact sign test, Holm's correction and fewest rounds
+   from it ("How the image comparison runs"). It comes unmodified from PyPI, pinned with its hashes in
+   `notebooks/requirements-compare.lock`, without extras, and goes only into the notebook image and the comparison's
+   runner, never into the server image. Do not use more of pairbench, or add another Eugo package, without the
+   maintainer's decision.
+
    The image comparison also runs GuideLLM's public release image, pinned by digest, and the two side images the
    user puts in `global.compare.sides`. Examples, defaults and tests use only public upstream images (two vLLM
    releases) or made-up `registry.example/...` names.

@@ -10,7 +10,10 @@ Secrets for an optional Hugging Face token. It adds a small JupyterLab whose not
 
 Eugo, which maintains this pattern, runs an HPC platform that rebuilds open-source native and Python packages,
 PyTorch and vLLM among them, from source. This pattern does not use it: it installs stock packages only. More at
-[eugo.io](https://eugo.io/).
+[eugo.io](https://eugo.io/). One of those stock packages is Eugo's own: the image comparison takes its sign test,
+Holm's correction and fewest rounds from [pairbench](https://github.com/eugo-inc/pairbench), Eugo's open-source
+benchmarking tool (Apache-2.0), installed unmodified from PyPI into the notebook image and the comparison's runner; the
+server image has none of it.
 
 **The problem it solves.** This pattern does not replace Red Hat's AI products, such as Red Hat OpenShift AI, and it
 does not plug into them. It is a small, community-maintained reference point: stock vLLM on Ray Serve, built from
