@@ -1,0 +1,10 @@
+# The Python packages the image comparison (rhvp_compare) needs beyond the image it runs in. requirements.in takes
+# this file in, so the notebook image has them. scripts/compare-local.sh and CI install requirements-compare.lock,
+# made from this file and hash-locked, wheels only:
+#
+#   uv pip compile requirements-compare.in --universal --python-version 3.12 \
+#       --only-binary :all: --generate-hashes -o requirements-compare.lock
+#
+# pairbench (https://pypi.org/project/pairbench/): the exact sign test, Holm's correction and the fewest rounds
+# behind the comparison's verdicts (rhvp_compare/stats.py). Standard library only, without extras.
+pairbench==0.1.0
