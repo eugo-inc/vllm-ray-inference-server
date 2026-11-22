@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Compare two inference-server images on one machine with docker, no cluster: the same runner, launches, GuideLLM
 # load and analysis as the OpenShift Job (see README, "Compare two images"), with GPU power from nvidia-smi instead
-# of DCGM. Needs docker and, for GPU sides, one NVIDIA GPU with the NVIDIA Container Toolkit; nothing else on the
-# host.
+# of DCGM. Needs docker, access to PyPI for pairbench (step 2 below) and, for GPU sides, one NVIDIA GPU with the
+# NVIDIA Container Toolkit; nothing else on the host.
 #
 #   scripts/compare-local.sh <config.json> <results folder>
 #
@@ -13,13 +13,19 @@
 #
 # What it does:
 #   1. Creates the docker network $NETWORK if it is missing.
-#   2. Runs the runner (notebooks/rhvp_compare, mounted read-only) in a container of the GuideLLM image on that
-#      network, with the docker socket mounted. The runner starts each side and the nvidia-smi sampler as sibling
+#   2. Installs pairbench (the comparison's sign test, Holm's correction and fewest rounds), which the GuideLLM
+#      image does not have, from notebooks/requirements-compare.lock: pip in a throwaway container of the GuideLLM
+#      image downloads it from PyPI, checks its hash, and installs it into a new temporary folder, removed when the
+#      script ends. No other package is installed. A failed install stops the script with exit 3 before the runner
+#      starts.
+#   3. Runs the runner (notebooks/rhvp_compare, and that folder, both mounted read-only) in a container of the
+#      GuideLLM image on that network, with the docker socket mounted. The runner starts each side and the nvidia-smi sampler as sibling
 #      containers on the same network, one launch at a time, and runs GuideLLM as its own child process, as the
 #      OpenShift Job does.
-#   3. Prints where results.json and results.md are. The exit code is the runner's: 0 when every launch finished,
-#      1 for a partial run, 2 for a config that cannot run, 3 for a run that failed outside a launch, 4 when the
-#      server container (SERVER_CONTAINER) could not be started again, 5 when another comparison was running.
+#   4. Prints where results.json and results.md are. The exit code is the runner's: 0 when every launch finished,
+#      1 for a partial run, 2 for a config that cannot run, 3 for a run that failed outside a launch (or pairbench
+#      that could not be installed, step 2), 4 when the server container (SERVER_CONTAINER) could not be started
+#      again, 5 when another comparison was running.
 #
 # One comparison at a time: the runner container carries the label rhvp-compare.runner, and a run refuses to start
 # while an older one is running. Stopping the runner (docker stop, or Ctrl-C on this script) cuts the current launch
@@ -109,6 +115,18 @@ cpuset_flag=()
 ulimit_flag=()
 [ -z "$RUNNER_OPEN_FILES" ] || ulimit_flag=(--ulimit "nofile=$RUNNER_OPEN_FILES:$RUNNER_OPEN_FILES")
 
+# pairbench for the runner (step 2 above): hash-checked, wheels only, nothing else, into a folder of its own.
+# NVIDIA_VISIBLE_DEVICES=void keeps a GPU out of this container where docker's default runtime is NVIDIA's.
+PYTHON_DEPS="$(mktemp -d "${TMPDIR:-/tmp}/rhvp-compare-pairbench.XXXXXX")"
+trap 'rm -rf "$PYTHON_DEPS"' EXIT
+docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -e NVIDIA_VISIBLE_DEVICES=void \
+  -v "$REPO/notebooks/requirements-compare.lock:/requirements-compare.lock:ro" \
+  -v "$PYTHON_DEPS:/deps" \
+  --entrypoint python "$LOAD_IMAGE" \
+  -m pip install --disable-pip-version-check --no-cache-dir --no-deps --only-binary :all: --require-hashes \
+  --target /deps -r /requirements-compare.lock >&2 \
+  || { echo "could not install pairbench from notebooks/requirements-compare.lock (needs access to PyPI)" >&2; exit 3; }
+
 docker run --rm --name "$RUNNER_NAME" --network "$NETWORK" \
   --label rhvp-compare.runner=1 --memory "$RUNNER_MEMORY" --stop-timeout "$STOP_TIMEOUT" --init \
   "${ulimit_flag[@]}" \
@@ -118,7 +136,8 @@ docker run --rm --name "$RUNNER_NAME" --network "$NETWORK" \
   -v "$RESULTS:/results" \
   -v "$CONFIG:/config/compare.json:ro" \
   -v "$REPO/notebooks/rhvp_compare:/runner/rhvp_compare:ro" \
-  -e PYTHONPATH=/runner \
+  -v "$PYTHON_DEPS:/runner-deps:ro" \
+  -e PYTHONPATH=/runner:/runner-deps \
   -e PYTHONDONTWRITEBYTECODE=1 \
   -e HOME=/tmp/home \
   -e HF_HOME=/tmp/hf \
