@@ -236,7 +236,10 @@ What the cluster's installs must provide:
     creates on AWS (`gpuMachineSet: create`) is tainted `nvidia.com/gpu=true:NoSchedule`;
   - labels them `nvidia.com/gpu.present=true`, which the server's node affinity asks for, and offers whole GPUs to
     pods as `nvidia.com/gpu`, which the server requests. MIG with the `mixed` strategy, or time-slicing with
-    `renameByDefault: true`, offers other resource names, and the server pod then stays Pending.
+    `renameByDefault: true`, offers other resource names, and the server pod then stays Pending;
+  - for the image comparison's scale-out mode, runs NVIDIA's GPU feature discovery (`spec.gfd.enabled`): the
+    comparison's runner reads its node labels (`nvidia.com/gpu.count`, `nvidia.com/gpu.replicas`) before a run, and
+    refuses the run when no GPU node has them.
 - For the image comparison's tokens per joule (`global.compare.energy.source: auto`, the default): the DCGM
   exporter on with its ServiceMonitor (`spec.dcgmExporter.enabled` and `spec.dcgmExporter.serviceMonitor.enabled`),
   the operator's namespace labeled `openshift.io/cluster-monitoring: "true"`, and a power sample every 2 seconds

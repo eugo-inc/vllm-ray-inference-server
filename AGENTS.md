@@ -703,11 +703,13 @@ of apps differs by exactly the eight objects in the names table's "GPU operators
 
 What the cluster's installs must provide is in the README, "Reuse the cluster's GPU operators": NFD labeling the GPU
 nodes; a ready ClusterPolicy with a driver of 580 or newer, tolerating the GPU nodes' taints, labeling them
-`nvidia.com/gpu.present=true` and offering `nvidia.com/gpu`; for the comparison's energy, the DCGM exporter with its
-ServiceMonitor, the namespace label and the 2 s interval; for two pods on one GPU, its own time-slicing with
-`renameByDefault: false`. Nothing on the cluster checks the energy part before a run: a too-slow DCGM interval shows
-only as each level's note ("N power samples in the window; at least 10 are needed") once the run is under way. The
-runner's scale-out node check (`KubeBackend.check_plan`) names the cluster's ClusterPolicy in its hint.
+`nvidia.com/gpu.present=true` and offering `nvidia.com/gpu`; for the comparison's scale-out mode, GPU feature discovery
+on (`spec.gfd.enabled`), whose node labels `KubeBackend.check_plan` reads; for the comparison's energy, the DCGM
+exporter with its ServiceMonitor, the namespace label and the 2 s interval; for two pods on one GPU, its own
+time-slicing with `renameByDefault: false`. Nothing on the cluster checks the energy part before a run: a too-slow DCGM
+interval shows only as each level's note ("N power samples in the window; at least 10 are needed") once the run is under
+way. The runner's scale-out node check (`KubeBackend.check_plan`) names the cluster's ClusterPolicy in its time-slicing
+hints, and names GPU feature discovery instead when no GPU node of the sides' CPU type has its count label.
 
 Not checked yet: any of this on a cluster. Only renders, the values checks and unit tests have run. Switching a
 running install is not supported and has not been tried. From `install` to `reuse` nothing is removed, as the apps

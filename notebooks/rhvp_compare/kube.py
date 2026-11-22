@@ -544,7 +544,12 @@ class KubeBackend:
             short = short or share_fits(labels, shared)  # the labels fit, the allocatable GPUs do not
             offered.append(node_offer(node))
         what = "; ".join(offered) or f"no node with the label {GPU_COUNT_LABEL}"
-        if short and shared:
+        if not offered:
+            hint = (f"add a GPU node of this CPU type, with NVIDIA's GPU feature discovery on: this check reads its "
+                    f"node labels ({GPU_COUNT_LABEL}, {GPU_REPLICAS_LABEL}). The ClusterPolicy's spec.gfd.enabled "
+                    "turns it on; charts/all/nvidia-gpu-config sets it, and with global.gpuOperators reuse the "
+                    "cluster's own ClusterPolicy decides")
+        elif short and shared:
             hint = (f"offer the shares to pods as {WHOLE_GPU_RESOURCE}: a node whose labels fit offers fewer than 2, "
                     f"as when the device plugin renames time-sliced shares to {WHOLE_GPU_RESOURCE}.shared "
                     "(renameByDefault: true; charts/all/nvidia-gpu-config sets it to false, and with "
