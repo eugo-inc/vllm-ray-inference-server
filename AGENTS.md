@@ -23,8 +23,9 @@ one OpenShift cluster:
   (`ray.serve.llm.build_openai_app`). It serves an OpenAI-compatible API on port 8000. The cluster builds the image
   itself from `inference-server/`, using stock packages only: PyPI wheels on NVIDIA's CUDA UBI 9 image. There is no
   KubeRay and no OpenShift AI.
-- **GPU enablement.** Node Feature Discovery and the NVIDIA GPU Operator. On AWS, an imperative job also creates
-  one GPU node (see above).
+- **GPU enablement.** Node Feature Discovery and the NVIDIA GPU Operator, installed by the pattern
+  (`global.gpuOperators: install`, the default) or the cluster's own (`reuse`, not yet run on a cluster; "Installing
+  or reusing the GPU operators" below). On AWS, an imperative job also creates one GPU node (see above).
 - **Secrets.** HashiCorp Vault plus the External Secrets Operator carry an optional Hugging Face token.
 - **A notebook.** A small JupyterLab behind OpenShift login. Its notebook times the server.
 - **An image comparison**, off by default (`global.compare`). A Job compares two inference-server images on the
@@ -60,7 +61,8 @@ one, change it everywhere and run the tests.
 | Image comparison permissions | Role and RoleBinding `image-compare-sides` in `vllm-inference` (pods, pods/log, Secret `huggingface-secret`, `deployments/scale` of `ray-serve-llm`); Role and RoleBinding `image-compare-status` in `vllm-notebook` (ConfigMaps; list pods, for one run at a time); ClusterRole and ClusterRoleBinding `vllm-notebook-image-compare` (get on nodes, plus list in mode `scaleout`; get on clusterversions); ClusterRoleBinding `vllm-notebook-image-compare-monitoring` (`cluster-monitoring-view`, unless energy is `none`); in keda mode also get and patch on ScaledObject `ray-serve-llm` (`scaledobjects.keda.sh`) in `image-compare-sides` |
 | Image comparison results | PVC `image-compare-results` in `vllm-notebook`, mounted at `/results` in the runner and read-only in the notebook (`RHVP_COMPARE_RESULTS`); status ConfigMap `compare-<run id>` (labels `app.kubernetes.io/component=compare-run`, `compare-run-id=<run id>`) |
 | Image comparison sides | Pods `cmp-<last 8 characters of the run id>-<NN, the launch>-<a, a-same, b or b-same>` in `vllm-inference`, labels `app.kubernetes.io/name=image-compare-side`, `rhvp-compare/run=<run id>`, `rhvp-compare/side` (`A`, `A-same`, `B`, `B-same`), `rhvp-compare/launch` and `rhvp-compare/round` (a number, or `warmup`) |
-| DCGM metrics | namespace `nvidia-gpu-operator` labeled `openshift.io/cluster-monitoring: "true"` (`variants/prod/values-prod.yaml`); while `global.compare.enabled` is true and energy is not `none`, the ClusterPolicy sets `DCGM_EXPORTER_INTERVAL` to 2000 ms and the ServiceMonitor interval to `2s` |
+| DCGM metrics | namespace `nvidia-gpu-operator` labeled `openshift.io/cluster-monitoring: "true"` (`overrides/values-gpu-operators-install.yaml`); while `global.compare.enabled` is true and energy is not `none`, the ClusterPolicy sets `DCGM_EXPORTER_INTERVAL` to 2000 ms and the ServiceMonitor interval to `2s`; with `global.gpuOperators: reuse` the pattern sets none of it, and the cluster's ClusterPolicy and namespace must |
+| GPU operators (`global.gpuOperators: install`) | namespaces `openshift-nfd` and `nvidia-gpu-operator` (each with an OperatorGroup for its own namespace), Subscription keys `nfd` (package `nfd`) and `nvidia` (package `gpu-operator-certified`, `certified-operators`), apps `nfd-config` (NodeFeatureDiscovery `nfd-instance`) and `nvidia-gpu-config` (ClusterPolicy `nvidia-gpu-cluster-policy`); all in `overrides/values-gpu-operators-install.yaml`, which `sharedValueFiles` includes as `/overrides/values-gpu-operators-<global.gpuOperators>.yaml`; `reuse` has no file |
 | Server metrics | Ray's Prometheus metrics on port `8080` (`server.metricsPort`, `metrics_port` in `llm.yaml`, `ray.init(_metrics_export_port=...)`) in every install; container port and Service port named `metrics` only in keda mode; vLLM's waiting-request gauge is `ray_vllm_num_requests_waiting` |
 | Replica count log line | one JSON line `{"event":"rhvp-scale",...}` per change (`inference-server/rhvp_scale.py` defines it; `notebooks/rhvp_compare/logs.py` keeps its own copy of the names); on OpenShift the pod log carried it inside a Ray JSON log record, as the record's `message`, which `logs.scale_events` also reads; deployments as Ray Serve LLM names them, `LLMServer:<model id, "/" as "--" and "." as "_">` and `OpenAiIngress` |
 | Compile cache volume | PVC `ray-serve-llm-compile-cache` at `/cache` while `compileCache.mode` is `node` (ReadWriteOnce) or `shared` (ReadWriteMany); `none` keeps the emptyDir |
@@ -68,7 +70,7 @@ one, change it everywhere and run the tests.
 | Autoscaler objects (keda mode) | in `vllm-inference`: ScaledObject `ray-serve-llm` (on Deployment `ray-serve-llm`), TriggerAuthentication `keda-trigger-auth-prometheus`, ServiceAccount `thanos`, Roles and RoleBindings `thanos-metrics-reader` and `keda-operator-token-creator` (for ServiceAccount `openshift-keda/keda-operator`), ServiceMonitor `ray-serve-llm` (port `metrics`, bearer token from Secret `ray-serve-llm-metrics-token`, key `token`) |
 | Metrics token (keda mode) | Secret `ray-serve-llm-metrics-token`, key `token` (`templates/metrics-token.yaml`): Ray's cluster token, mounted read-only in the server container at `/etc/ray-auth/token` (volume `ray-auth`, `subPath: token`, named by `RAY_AUTH_TOKEN_PATH`) and sent by ServiceMonitor `ray-serve-llm`; Argo CD ignores its `/data/token` (`overrides/values-scaleout-keda.yaml`) |
 | Autoscaler pause | annotation `autoscaling.keda.sh/paused-replicas: "0"` on ScaledObject `ray-serve-llm`, set by the comparison's runner (env `RHVP_COMPARE_SERVER_SCALED_OBJECT`, from `compare.serverScaledObject` in the notebook chart) and ignored by Argo CD (`overrides/values-scaleout-keda.yaml`) |
-| GPU time-slicing | ConfigMap `time-slicing-config` (key `any`) in `nvidia-gpu-operator`, named by the ClusterPolicy's `devicePlugin.config` only while `timeSlicing.enabled` is true |
+| GPU time-slicing | ConfigMap `time-slicing-config` (key `any`) in `nvidia-gpu-operator`, named by the ClusterPolicy's `devicePlugin.config` only while `timeSlicing.enabled` is true; `install` only (refused with `reuse`) |
 | Comparison on OpenShift, scale-out mode | second replica pod `<first replica's pod name>-2` in `vllm-inference` (a twin's: `cmp-<id>-<NN>-a-same-2`), both pods labeled `rhvp-compare/replica` (`1`, `2`) and pinned to one node; GPU feature discovery's node labels `nvidia.com/gpu.count` and `nvidia.com/gpu.replicas` (`kube.GPU_COUNT_LABEL`, `kube.GPU_REPLICAS_LABEL`), which `check_plan` and the pods' node affinity read; per scored launch `server-2.log` and `router.log` in the runner's results folder |
 | Comparison with docker, scale-out mode | second replica container `<first replica's name>-2` (a twin's: `rhvp-cmp-<id>-<NN>-a-same-2`); warm compile-cache volumes `<CACHE_VOLUME>-<last 8 characters of the run id>-<a or b>`; per scored launch `server-2.log` (artifact `server_log_2`) and `router.log`; env `RHVP_COMPARE_REPLICA_GPUS`, `RHVP_COMPARE_CPUSET`, `RHVP_COMPARE_CACHE_VOLUME` (from `REPLICA_GPUS`, `CPUSET`, `CACHE_VOLUME` in `scripts/compare-local.sh`); helper containers `rhvp-cmp-<last 8 characters of the run id>-gpu-probe-<1 or 2>` and `...-gpu-mig-<1 or 2>` (nvidia-smi, before the first launch); server-record fields `gpus` and `gpu_uuids` (in each launch's `servers`, `$defs/server`) |
 
@@ -77,10 +79,12 @@ one, change it everywhere and run the tests.
 ```
 AGENTS.md  CLAUDE.md (@AGENTS.md)  README.md  LICENSE (Apache-2.0)  LICENSES/BSD-3-Clause.txt
 pattern-metadata.yaml  .gitignore
-values-global.yaml            pattern name, global.gpuMachineSet, global.model.*, main.variant
+values-global.yaml            pattern name, global.gpuMachineSet, global.gpuOperators, global.model.*, main.variant
 values-secret.yaml.template   secrets file format: hfmodel / hftoken, value "none"
 variants/prod/values-prod.yaml   the cluster group: namespaces, operator subscriptions, Argo CD apps, imperative jobs
 overrides/values-gpu-machineset-create-AWS.yaml   create-gpu-machineset imperative job and its RBAC
+overrides/values-gpu-operators-install.yaml   global.gpuOperators install: the NFD and GPU Operator namespaces,
+                                              Subscriptions and apps (nfd-config, nvidia-gpu-config)
 overrides/values-scaleout-keda.yaml   keda mode: the Custom Metrics Autoscaler's namespace, Subscription and app,
                                       and the ray-serve-llm app's ignore rules restated with the pause annotation
                                       and the metrics token's data
@@ -113,7 +117,7 @@ notebooks/rhvp_compare/        the image comparison: plan, runner, probe, guidel
                                compare_images.ipynb and
                                compare-recordings/synthetic.json are generated by make_notebook.py
 scripts/                       render-charts.sh, validate-values.sh (with pattern_settings.py, the scale-out
-                               rules), local-smoke.sh, compare-local.sh
+                               and GPU operator rules), local-smoke.sh, compare-local.sh
 tests/                         test_serve_config.py, test_secrets_template.py, test_charts.py,
                                test_server_chart.py, test_scaleout_contract.py (conftest.py and
                                chart_helpers.py share one chart render),
@@ -475,8 +479,9 @@ Three parts, each off by default. With every default, the local charts render ex
   created again, or the landing order under "Not checked yet"), the running server pods keep the old token through
   their `subPath` mount while the scrape sends the new one, so the docs say to delete the server pods after any
   change. Prerequisites: monitoring for user-defined projects enabled on the cluster, and a second GPU (another GPU
-  node, or `timeSlicing.enabled` in `charts/all/nvidia-gpu-config/values.yaml`, with `gpu_memory_utilization` lowered
-  to leave room for the other pod; nothing checks that). Time-slicing covers every GPU node and namespace, while the
+  node, or `timeSlicing.enabled` in `charts/all/nvidia-gpu-config/values.yaml`, or with `global.gpuOperators: reuse`
+  time-slicing in the cluster's own ClusterPolicy, with `gpu_memory_utilization` lowered to leave room for the other
+  pod; nothing checks that). Time-slicing covers every GPU node and namespace, while the
   comparison's `kube.gpu_free` looks only at `vllm-inference`: a GPU pod from another namespace can then share a timed
   GPU unseen, so the docs say to turn it off before a comparison in mode `levels`. The comparison's mode `scaleout`
   with `sharedGpu: true` needs it on with two shares; there a GPU pod from another namespace that holds the second
@@ -672,6 +677,38 @@ Not checked yet:
   container given a MIG device, and that `nvidia-smi -L` lists the device's own UUID, is from NVIDIA's documented
   output, not from a run.
 
+### Installing or reusing the GPU operators
+
+`global.gpuOperators` (`values-global.yaml`) takes `install` or `reuse`. `variants/prod/values-prod.yaml` adds
+`/overrides/values-gpu-operators-<value>.yaml` to `sharedValueFiles`, and only the install file exists: it holds
+both operators' namespaces, Subscriptions and apps (names table, "GPU operators"), maps only, so it merges into the
+variant's. With `reuse` the app of apps creates none of them. A Namespace in particular is never rendered for the
+cluster's own operators: Argo CD would adopt it, and an uninstall could delete it with the operator in it.
+
+The operators sit in the file that exists for `install` rather than behind a `disabled: true` file for `reuse` on
+purpose: a misspelled or missing value then installs nothing, instead of a second copy of both operators next to the
+cluster's (a second OperatorGroup in their namespace, and their Subscription and NodeFeatureDiscovery written over
+where the names match the pattern's). The server chart, which always renders, refuses any value other than `install`
+or `reuse`, and a missing one (`_settings.tpl`; no default in its `values.yaml`, which would hide a missing key);
+`scripts/pattern_settings.py` (`check_gpu_config`, through `scripts/validate-values.sh`) refuses the same with the
+same message, and refuses `timeSlicing.enabled` with `reuse`, as does the GPU chart's own render
+(`templates/time-slicing-config.yaml`). The cluster renders no app for that chart with `reuse`, so on the cluster
+the time-slicing setting would silently do nothing; only those two local checks catch it. With `reuse` every local
+chart renders exactly as with `install`, and the app of apps differs by exactly the eight objects in the names
+table's "GPU operators" row (`tests/test_charts.py`).
+
+What the cluster's installs must provide is in the README, "Reuse the cluster's GPU operators": NFD labeling the GPU
+nodes; a ready ClusterPolicy with a driver of 580 or newer, tolerating the GPU nodes' taints, labeling them
+`nvidia.com/gpu.present=true` and offering `nvidia.com/gpu`; for the comparison's energy, the DCGM exporter with its
+ServiceMonitor, the namespace label and the 2 s interval; for two pods on one GPU, its own time-slicing with
+`renameByDefault: false`. Nothing on the cluster checks the energy part before a run: a too-slow DCGM interval shows
+only as each level's note ("N power samples in the window; at least 10 are needed") once the run is under way. The
+runner's scale-out node check (`KubeBackend.check_plan`) names the cluster's ClusterPolicy in its hint.
+
+Not checked yet: any of this on a cluster. Only renders, the values checks and unit tests have run. Switching a
+running install from `install` to `reuse` (nothing is removed, as the apps sync without pruning) or back (a second
+copy of both operators) is not supported and has not been tried.
+
 ## How to deploy
 
 The pattern deploys through Red Hat OpenShift GitOps and the Validated Patterns Operator. Argo CD deploys what is
@@ -681,9 +718,14 @@ it to sync.
 ### Prerequisites
 
 - OpenShift 4.18 or newer, and cluster-admin access.
-- A cluster that does not already run Node Feature Discovery or the NVIDIA GPU Operator. The pattern installs both
-  itself, with its own OperatorGroups and settings, and can clash with existing installs of them. It has not been
-  tried on a cluster that runs OpenShift AI.
+- Node Feature Discovery and the NVIDIA GPU Operator, one of:
+  - a cluster that runs neither (the default, `global.gpuOperators: install`). The pattern installs both itself,
+    with its own OperatorGroups and settings, and would clash with existing installs of them.
+  - a cluster that already runs both, such as an OpenShift AI GPU cluster, with `global.gpuOperators: reuse` set in
+    your fork before you install. Their ClusterPolicy must provide what the README, "Reuse the cluster's GPU
+    operators", lists. This has not been run on a cluster yet.
+
+  The pattern has not been tried on a cluster that runs OpenShift AI.
 - A StorageClass that provisions volumes dynamically, for the model PVC.
 - The internal image registry set to `Managed`, and the `Build` and `ImageRegistry` cluster capabilities enabled.
   The cluster builds both images itself. To check:
@@ -723,6 +765,8 @@ it to sync.
    ```
 2. Edit `values-global.yaml`:
    - `global.gpuMachineSet`: `create` (the default: one AWS g6.2xlarge with one L4) or `none`.
+   - `global.gpuOperators`: `install` (the default: the pattern installs NFD and the NVIDIA GPU Operator) or
+     `reuse` (the cluster already runs both; README, "Reuse the cluster's GPU operators").
    - `global.model.id`: the name clients send as `model`.
    - `global.model.source`: the Hugging Face repo id.
    - `global.model.revision`: the Hugging Face commit to pin.
@@ -766,9 +810,10 @@ it to sync.
       fork.
    6. The clustergroup chart creates:
       - the namespaces and OperatorGroups;
-      - the operator Subscriptions: External Secrets, NFD and the NVIDIA GPU Operator;
-      - one Argo CD Application per app: `vault`, `openshift-external-secrets`, `nfd-config`,
-        `nvidia-gpu-config`, `ray-serve-llm` and `notebook`;
+      - the operator Subscriptions: External Secrets, and with `gpuOperators: install` NFD and the NVIDIA GPU
+        Operator;
+      - one Argo CD Application per app: `vault`, `openshift-external-secrets`, `ray-serve-llm` and `notebook`,
+        and with `gpuOperators: install` also `nfd-config` and `nvidia-gpu-config`;
       - the imperative CronJob, which runs two jobs: `create-gpu-machineset` (the playbook
         `rhvp.cluster_utils.create_machineset`) on AWS when `gpuMachineSet: create`, and `rebuild-on-commit`.
    7. The apps then come up. The BuildConfigs build the server and notebook images inside the cluster. The server
@@ -952,8 +997,12 @@ Framework facts that catch people out:
   both.
 - Missing `sharedValueFiles` are skipped. That is how `gpuMachineSet: none`, or any platform other than AWS,
   turns the MachineSet job off, and how `global.scaleOut.mode: none` adds no autoscaler: each app's valueFiles
-  then lists `/overrides/values-scaleout-none.yaml`, which does not exist. A value named in a `sharedValueFiles`
-  entry must be set, or the clustergroup chart's render fails; `scripts/validate-values.sh` checks it.
+  then lists `/overrides/values-scaleout-none.yaml`, which does not exist. It is also how `global.gpuOperators:
+  reuse` installs neither GPU operator: they are in the install file, so a misspelled value installs nothing rather
+  than a second copy ("Installing or reusing the GPU operators"). A value named in a `sharedValueFiles` entry must be
+  set: a missing nested one (`global.scaleOut.mode`) fails the clustergroup chart's render, and a missing top-level
+  one (`global.gpuOperators`) renders as an empty word there, so its file is skipped; `scripts/validate-values.sh`
+  checks both.
 - Keep app keys equal to chart folder names.
 
 ## Local development loop
@@ -1154,7 +1203,10 @@ rounds ("How the image comparison runs"). For a new version:
 - **The server pod stays Pending with "Insufficient nvidia.com/gpu".**
   - Why: no node advertises `nvidia.com/gpu` yet. The chain is: the MachineSet job (AWS) → the node joins → NFD
     labels it → the GPU Operator installs the driver and device plugin. The ClusterPolicy must tolerate the
-    `nvidia.com/gpu` taint. Argo CD sync waves do not order apps in this framework; apps retry instead.
+    `nvidia.com/gpu` taint. Argo CD sync waves do not order apps in this framework; apps retry instead. With
+    `global.gpuOperators: reuse` that ClusterPolicy is the cluster's own: check that `oc get clusterpolicies` shows it
+    `ready`, its `spec.daemonsets.tolerations`, and that it offers `nvidia.com/gpu` (not a MIG or `.shared` name),
+    in the namespace its pods run in.
   - Check:
     ```sh
     oc get nodes -l nvidia.com/gpu.present=true
@@ -1199,3 +1251,5 @@ the NVIDIA L4 on the default AWS node (README, "What this pattern was verified a
   oc delete machineset <name-of-the-g6.2xlarge-machineset> -n openshift-machine-api
   ```
 - Check `oc get pv` for a leftover volume from claim `vllm-inference/ray-serve-llm-models`.
+- With `global.gpuOperators: reuse` the pattern created no object of the cluster's NFD or GPU Operator, so its apps
+  have none of them to remove (not tried on a cluster).
