@@ -487,9 +487,10 @@ the current side down; the server's pod then waits for the GPU. It tries the sca
 back to check.
 
 With the default settings a run is 8 rounds of 4 server starts, plus one warm-up start per side: 34 server starts.
-Each measured start is followed by three 60-second load levels, the power read and the teardown. We estimate about
-4 to 6 hours on one GPU (16 rounds: 66 starts, about 8 to 12 hours), but no run with these settings has been timed on
-a cluster; the shorter runs on OpenShift are in "What has not been checked".
+Each measured start is followed by three 60-second load levels, the power read and the teardown. One run with these
+settings has been timed on a cluster: it took 3 hours 46 minutes on OpenShift with one NVIDIA L4, with upstream vLLM
+0.33.0 and this pattern's server as the sides (the full-length run in "What has not been checked"). For 16 rounds (66
+starts) we estimate about 8 to 12 hours; no run of that length has been timed.
 
 The `ray-serve-llm` app ignores the Deployment's `replicas` on every install, also when the comparison is off: a sync
 never changes the server's replica count. That keeps a sync during a run from bringing the server back early, and
@@ -685,8 +686,9 @@ runner writes, the three functions give the same values as the pattern's own cod
 recorded results with both gave byte-identical `results.json` and `results.md` files. The one difference: a results
 file edited by hand to an alpha of 1 or more, 0 or less, or NaN (the plan takes 0.0001 to 0.5) now stops
 `python -m rhvp_compare analyze` with an error, where the earlier code gave an analysis for 1 or more and for NaN, and
-never finished for 0 or less. The runs with real servers and on OpenShift described below came before pairbench was
-added, so their statistics were the pattern's own code throughout.
+never finished for 0 or less. Apart from the full-length run on OpenShift, the runs with real servers and on OpenShift
+described below came before pairbench was added, so their statistics were the pattern's own code throughout. The
+full-length run was the first run on OpenShift with pairbench 0.1.0 doing these statistics.
 
 With n rounds no p-value can be smaller than 2^(1-n), and Holm multiplies the smallest one by the number of primary
 cases that got a p-value. A primary case with fewer than 2 rounds in which both sides have a figure above 0 gets no
@@ -839,10 +841,10 @@ per second, over the whole level, is not timed per token.
 ### What has not been checked
 
 - The rule with twins (rounds of A, A~same, B, B~same; the bar from the twins) has run with real servers in three
-  comparisons described here, all with docker on one machine with one GPU whose memory is the machine's own
-  (`scripts/compare-local.sh`). Later runs with real servers under the same rule, one of them with compile caches
-  kept between starts, are not among the three. Each of the three was planned as 8 rounds with a twin for both
-  sides, after one warm-up launch per
+  comparisons with docker described here, all on one machine with one GPU whose memory is the machine's own
+  (`scripts/compare-local.sh`), and in one on OpenShift (the full-length run below). Later runs with real servers under
+  the same rule, one of them with compile caches kept between starts, are not among the three. Each of the three was
+  planned as 8 rounds with a twin for both sides, after one warm-up launch per
   side, and in each both sides used the `ray-serve-llm` preset: this pattern's own server. Two finished all 8 rounds (34
   launches each). The third was stopped in round 7 by a script around the runner that stops a run when the machine's
   free memory runs low: the runner recorded the launch it was in as `STOPPED`, saved the run as partial and analyzed the
@@ -859,13 +861,15 @@ per second, over the whole level, is not timed per token.
 - What those three runs leave unchecked. One machine, one GPU, docker only, and one model: the example's, already on the
   model volume, so the warm-up launches downloaded nothing. Not the default settings: one load level (1 stream for 5 s,
   64 prompt and 16 output tokens) instead of three 60-second levels, `gpuMemoryUtilization` 0.12, and
-  `startup/first_answer_s` as the only primary case, so no run with real servers has graded the default primary cases.
-  No energy (`energy.source: none`). No `vllm-openai` or `custom` side, no live server stopped and started again
-  (`SERVER_CONTAINER`), and no warm compile cache. Images built for these runs, not by the pattern: two images built on
+  `startup/first_answer_s` as the only primary case, so none of those three runs graded the default primary cases (the
+  full-length run on OpenShift below did). No energy (`energy.source: none`). No `vllm-openai` or `custom` side, no live
+  server stopped and started again (`SERVER_CONTAINER`), and no warm compile cache. Images built for these runs, not by
+  the pattern: two images built on
   vLLM 0.33 (0.33.0 and a development build of it), each with Ray Serve LLM and this pattern's server files; the 0.33.0
   one got Ray 2.60.0, with one import line in Ray changed for a vLLM module that moved in 0.33. The image the cluster
-  builds from `inference-server/` (vLLM 0.29.0) was not a side in them; it has been a side only in the first run on
-  OpenShift below, without twins. In one of the three runs both sides started through a wrapper `command` that then ran
+  builds from `inference-server/` (vLLM 0.29.0) was not a side in them; it has been a side only in two runs on
+  OpenShift below: the first one, without twins, and the full-length one, with twins. In one of the three runs both
+  sides started through a wrapper `command` that then ran
   the pattern's entrypoint, on the same images with a test layer added, which on one side also changed how the server's
   processes read the model's weights: test code in those processes read every page of the larger weight tensors before
   vLLM copied them. In that run the wrapper also recorded the page-cache state of the model's files before each start,
@@ -887,18 +891,21 @@ per second, over the whole level, is not timed per token.
   their figures say nothing about the two releases. The Kubernetes backend has started real servers only on
   OpenShift (see below).
 - Tokens per joule has been computed from real power samples in the two smoke runs, from nvidia-smi (2 samples a
-  second), and from DCGM in the two runs in mode `levels` on OpenShift described below; the three runs with twins
-  measured no energy. On OpenShift the reader found the side pods' power in the cluster's monitoring for every scored
-  level (8 in the first run, 12 in the second), each from DCGM's energy counter with 15 power samples in its 30 seconds:
-  one every 2 seconds, the interval that the pattern's ClusterPolicy fields (`spec.dcgmExporter.env`,
-  `spec.dcgmExporter.serviceMonitor.interval`) ask for while the comparison is on. Which of the DCGM label names it
+  second), and from DCGM in the three runs in mode `levels` on OpenShift described below; the three runs with twins
+  under docker measured no energy. On OpenShift the reader found the side pods' power in the cluster's monitoring for
+  every scored level (8 in the first run, 12 in the second, 96 in the full-length run), each from DCGM's energy
+  counter. The first two runs had 15 power samples in each 30-second level: one every 2 seconds, the interval that the
+  pattern's ClusterPolicy fields (`spec.dcgmExporter.env`, `spec.dcgmExporter.serviceMonitor.interval`) ask for while
+  the comparison is on. The full-length run had 30 or 31 power samples in each 60-second level, with the same 2-second
+  interval set in the cluster's own ClusterPolicy, not by the pattern. Which of the DCGM label names it
   matches on (`exported_pod`, `exported_namespace`, `pod`, `Hostname`) the exporter used was not recorded; otherwise the
   reader is tested only against hand-written answers in the documented format (a Prometheus `query_range` matrix).
-- Three comparisons on OpenShift are described here, all complete, on two throwaway clusters on AWS (OpenShift
+- Four comparisons on OpenShift are described here, all complete, on three throwaway clusters on AWS (OpenShift
   4.22.18, three m5.2xlarge nodes that are both control plane and workers, and the pattern's g6.2xlarge node with one
   NVIDIA L4). In each, Argo CD created the Job, the runner's pod ran under the `restricted-v2` security context
-  constraint, the runner scaled the server to 0 and brought it back to one Ready pod, and no side pod was left. Every
-  case got NO VERDICT, as runs without twins must:
+  constraint, the runner scaled the server to 0 and brought it back to one Ready pod, and no side pod was left. The
+  first three had no twins, so every case in them got NO VERDICT, as runs without twins must. The last one, the
+  full-length run, had twins. They were:
   - Mode `levels`, with the comparison code of an earlier commit of `main`: side A upstream `vllm/vllm-openai` v0.33.0,
     side B this pattern's own server from the cluster's internal registry (preset `ray-serve-llm`, vLLM 0.29.0), one
     warm-up launch per side, then 2 rounds without twins, 30 s at each of 1 and 8 concurrent streams. All 6 launches
@@ -909,11 +916,23 @@ per second, over the whole level, is not timed per token.
     ("Picking the surge rate"). It took 21 minutes.
   - Mode `scaleout`, with the code described here apart from the statistics (the pattern's own, from before pairbench
     was added), upstream vLLM v0.32.0 and v0.33.0 ("The benchmark's scale-out mode").
+  - The full-length run, on November 23, 2026, on a new cluster whose owner had already installed Node Feature Discovery
+    and the NVIDIA GPU Operator from OperatorHub. The pattern was installed from a branch with a new setting,
+    `global.gpuOperators: reuse`, that reuses those two Operators instead of installing its own. That setting is now on
+    `main` ([Reuse the cluster's GPU operators](#reuse-the-clusters-gpu-operators)). Mode `levels` with the comparison's
+    default settings: side A upstream `vllm/vllm-openai` v0.33.0, side B this pattern's own server from the cluster's
+    internal registry (preset `ray-serve-llm`, vLLM 0.29.0), one warm-up launch per side, then 8 rounds with twins, 60 s
+    at each of 1, 8 and 32 concurrent streams. All 34 launches finished, in 3 hours 46 minutes, with DCGM energy
+    figures. No engine was started again and no load timed out. All 4 primary cases got a verdict, each in upstream's
+    favor (medians of A and B): time to first answer SLOWER (73.47 s and 200.36 s), the median time to first token at 32
+    streams SLOWER (89.5 ms and 200.1 ms), output tokens per second at 32 streams WORSE (4102 and 2044 tokens/s), and
+    output tokens per joule at 32 streams WORSE (56.9 and 31.6 tokens/J). The two sides differ in both vLLM version and
+    serving stack, so the run does not say which of the two made the difference.
 
-  Not run on OpenShift: twins, the default settings and the length of a run with them, a run that ends partial or is
-  stopped (the stop path and the early restore on a stop), the refusal of a second run, keda mode during a run (the
-  runner's pause), a side with `args` of its own, a `custom` side, a GuideLLM time-out and its new start, a server
-  started again after vLLM's start-up memory check, and a node with more than one GPU. The side pods' security context
+  Not run on OpenShift: a run that ends partial or is stopped (the stop path and the early restore on a stop), the
+  refusal of a second run, keda mode during a run (the runner's pause), a side with `args` of its own, a `custom`
+  side, a GuideLLM time-out and its new start, a server started again after vLLM's start-up memory check, and a node
+  with more than one GPU. The side pods' security context
   constraint was not recorded. Before those runs, the runner's Job, with the chart's RBAC, ran on a plain Kubernetes
   cluster (kind) against GuideLLM's mock server: it scaled a stand-in server to 0 and back, wrote the status ConfigMap
   and the termination message, and, when its Job was deleted mid-launch, recorded the launch as `STOPPED`, deleted the
@@ -923,7 +942,7 @@ per second, over the whole level, is not timed per token.
   the run as partial / `STOPPED` and started the stand-in live server again.
 - DCGM's answers are parsed under both the old and the new DCGM exporter metric names in tests; the runs on OpenShift
   read one of them from a real exporter, which one was not recorded.
-- `ray-serve-llm` sides finished scored launches in the three runs with twins, with and without `args`
+- `ray-serve-llm` sides finished scored launches in the three runs with twins under docker, with and without `args`
   (`--attention-backend FLASHINFER`, and in one run also `--safetensors-load-strategy eager`), but their servers turned
   `args` into engine settings with the earlier form above, not with the syntax and checks in "Run a comparison". The way
   the server now turns `args` into engine settings was run side by side against `vllm serve`'s own parser for vLLM
@@ -937,8 +956,10 @@ per second, over the whole level, is not timed per token.
   engine config on CPU refused the first three of those four and accepted the last; no engine was started. For vLLM
   0.29.0, which this pattern's image pins, only the engine arguments' declared types at that tag were read; nothing was
   run with it.
-- The length of a run with the default settings, and so of the server's outage, is an estimate (about 4 to 6 hours
-  for 34 server starts). The runs with twins, with 5 s of load at one level, do not time it.
+- The length of a run with the default settings, and so of the server's outage, has been timed in one run only: 3 hours
+  46 minutes for 34 server starts, in the full-length run on OpenShift above, with one NVIDIA L4 and the two sides it
+  compared, and the server was Ready again about 3 minutes after the run ended. The runs with twins under docker, with
+  5 s of load at one level, do not time it.
 
 ## Scale out
 
@@ -1516,8 +1537,8 @@ The first install below ran after the pattern and its namespaces were renamed. T
   cluster built both images; and the server pod turned Ready and answered `GET /v1/models` and a chat completion. The
   notebook pod ran; the notebook itself was not run on this cluster. Afterwards, this cluster ran the first comparison
   on OpenShift in "What has not been checked" (mode `levels`, with this pattern's own server as side B) and the runs
-  of both autoscalers in "What has not been checked for scale out"; the other two comparisons on OpenShift described
-  there ran on another throwaway cluster.
+  of both autoscalers in "What has not been checked for scale out"; the second and third comparisons on OpenShift
+  described there ran on another throwaway cluster.
 - **A fresh install on AWS** (November 2026): a new installer-provisioned compact cluster, not changed after the
   installer ran: OpenShift 4.22.18, x86_64, region us-east-1, three m5.2xlarge nodes that are both control plane and
   workers. The pattern was installed from `main` at commit `1a781d1` with the default settings in
