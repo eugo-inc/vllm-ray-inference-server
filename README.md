@@ -16,10 +16,9 @@ Holm's correction and fewest rounds from [pairbench](https://github.com/eugo-inc
 benchmarking tool (Apache-2.0), installed unmodified from PyPI into the notebook image and the comparison's runner; the
 server image has none of it.
 
-**The problem it solves.** This pattern does not replace Red Hat's AI products, such as Red Hat OpenShift AI, and it
-does not plug into them. It is a small, community-maintained reference point: stock vLLM on Ray Serve, built from
-known versions and measured the same way each time, so you can see what the upstream stack does on your GPU. It needs
-no OpenShift AI subscription.
+**The problem it solves.** This pattern complements Red Hat's AI products, such as Red Hat OpenShift AI. It is a
+small, community-maintained reference point: stock vLLM on Ray Serve, built from known versions and measured the same
+way each time, so you can see what the upstream stack does on your GPU. It needs no OpenShift AI subscription.
 
 - **One repository.** Your fork describes the GPU enablement (Node Feature Discovery and the NVIDIA GPU Operator, or
   the cluster's own), the server, its model cache, Vault and External Secrets for an optional Hugging Face token,
@@ -488,9 +487,10 @@ the current side down; the server's pod then waits for the GPU. It tries the sca
 back to check.
 
 With the default settings a run is 8 rounds of 4 server starts, plus one warm-up start per side: 34 server starts.
-Each measured start is followed by three 60-second load levels, the power read and the teardown. We estimate about
-4 to 6 hours on one GPU (16 rounds: 66 starts, about 8 to 12 hours), but no run with these settings has been timed on
-a cluster; the shorter runs on OpenShift are in "What has not been checked".
+Each measured start is followed by three 60-second load levels, the power read and the teardown. One run with these
+settings has been timed on a cluster: it took 3 hours 46 minutes on OpenShift with one NVIDIA L4, with upstream vLLM
+0.33.0 and this pattern's server as the sides (the full-length run in "What has not been checked"). For 16 rounds (66
+starts) we estimate about 8 to 12 hours; no run of that length has been timed.
 
 The `ray-serve-llm` app ignores the Deployment's `replicas` on every install, also when the comparison is off: a sync
 never changes the server's replica count. That keeps a sync during a run from bringing the server back early, and
@@ -686,8 +686,9 @@ runner writes, the three functions give the same values as the pattern's own cod
 recorded results with both gave byte-identical `results.json` and `results.md` files. The one difference: a results
 file edited by hand to an alpha of 1 or more, 0 or less, or NaN (the plan takes 0.0001 to 0.5) now stops
 `python -m rhvp_compare analyze` with an error, where the earlier code gave an analysis for 1 or more and for NaN, and
-never finished for 0 or less. The runs with real servers and on OpenShift described below came before pairbench was
-added, so their statistics were the pattern's own code throughout.
+never finished for 0 or less. Apart from the full-length run on OpenShift, the runs with real servers and on OpenShift
+described below came before pairbench was added, so their statistics were the pattern's own code throughout. The
+full-length run was the first run on OpenShift with pairbench 0.1.0 doing these statistics.
 
 With n rounds no p-value can be smaller than 2^(1-n), and Holm multiplies the smallest one by the number of primary
 cases that got a p-value. A primary case with fewer than 2 rounds in which both sides have a figure above 0 gets no
@@ -840,10 +841,10 @@ per second, over the whole level, is not timed per token.
 ### What has not been checked
 
 - The rule with twins (rounds of A, A~same, B, B~same; the bar from the twins) has run with real servers in three
-  comparisons described here, all with docker on one machine with one GPU whose memory is the machine's own
-  (`scripts/compare-local.sh`). Later runs with real servers under the same rule, one of them with compile caches
-  kept between starts, are not among the three. Each of the three was planned as 8 rounds with a twin for both
-  sides, after one warm-up launch per
+  comparisons with docker described here, all on one machine with one GPU whose memory is the machine's own
+  (`scripts/compare-local.sh`), and in one on OpenShift (the full-length run below). Later runs with real servers under
+  the same rule, one of them with compile caches kept between starts, are not among the three. Each of the three was
+  planned as 8 rounds with a twin for both sides, after one warm-up launch per
   side, and in each both sides used the `ray-serve-llm` preset: this pattern's own server. Two finished all 8 rounds (34
   launches each). The third was stopped in round 7 by a script around the runner that stops a run when the machine's
   free memory runs low: the runner recorded the launch it was in as `STOPPED`, saved the run as partial and analyzed the
@@ -853,20 +854,22 @@ per second, over the whole level, is not timed per token.
   but these runs came before the engine restart count (`engine_restarts`) and their records do not have it. GuideLLM
   timed out in six launches across the three runs; each of them ran again from a new start, as "What a run does"
   describes, and finished. These runs show that the runner, the load and the rule work end to end with real servers;
-  apart from the results that "Partner results: Eugo" gives, their figures are not reported here. Not among
-  the three: an earlier try of one of the two that finished, with the same settings and comparison code, which finished
-  its 2 warm-up and 15 scored launches before it was stopped the same way in round 4 and was saved as partial, and other
-  tries that were stopped in their first warm-up launch, before any scored launch.
+  their figures are not reported here (the results through this pattern's server in "Partner results: Eugo" come from
+  later runs). Not among the three: an earlier try of one of the two that finished, with the same settings and
+  comparison code, which finished its 2 warm-up and 15 scored launches before it was stopped the same way in round 4
+  and was saved as partial, and other tries that were stopped in their first warm-up launch, before any scored launch.
 - What those three runs leave unchecked. One machine, one GPU, docker only, and one model: the example's, already on the
   model volume, so the warm-up launches downloaded nothing. Not the default settings: one load level (1 stream for 5 s,
   64 prompt and 16 output tokens) instead of three 60-second levels, `gpuMemoryUtilization` 0.12, and
-  `startup/first_answer_s` as the only primary case, so no run with real servers has graded the default primary cases.
-  No energy (`energy.source: none`). No `vllm-openai` or `custom` side, no live server stopped and started again
-  (`SERVER_CONTAINER`), and no warm compile cache. Images built for these runs, not by the pattern: two images built on
+  `startup/first_answer_s` as the only primary case, so none of those three runs graded the default primary cases (the
+  full-length run on OpenShift below did). No energy (`energy.source: none`). No `vllm-openai` or `custom` side, no live
+  server stopped and started again (`SERVER_CONTAINER`), and no warm compile cache. Images built for these runs, not by
+  the pattern: two images built on
   vLLM 0.33 (0.33.0 and a development build of it), each with Ray Serve LLM and this pattern's server files; the 0.33.0
   one got Ray 2.60.0, with one import line in Ray changed for a vLLM module that moved in 0.33. The image the cluster
-  builds from `inference-server/` (vLLM 0.29.0) was not a side in them; it has been a side only in the first run on
-  OpenShift below, without twins. In one of the three runs both sides started through a wrapper `command` that then ran
+  builds from `inference-server/` (vLLM 0.29.0) was not a side in them; it has been a side only in two runs on
+  OpenShift below: the first one, without twins, and the full-length one, with twins. In one of the three runs both
+  sides started through a wrapper `command` that then ran
   the pattern's entrypoint, on the same images with a test layer added, which on one side also changed how the server's
   processes read the model's weights: test code in those processes read every page of the larger weight tensors before
   vLLM copied them. In that run the wrapper also recorded the page-cache state of the model's files before each start,
@@ -888,18 +891,21 @@ per second, over the whole level, is not timed per token.
   their figures say nothing about the two releases. The Kubernetes backend has started real servers only on
   OpenShift (see below).
 - Tokens per joule has been computed from real power samples in the two smoke runs, from nvidia-smi (2 samples a
-  second), and from DCGM in the two runs in mode `levels` on OpenShift described below; the three runs with twins
-  measured no energy. On OpenShift the reader found the side pods' power in the cluster's monitoring for every scored
-  level (8 in the first run, 12 in the second), each from DCGM's energy counter with 15 power samples in its 30 seconds:
-  one every 2 seconds, the interval that the pattern's ClusterPolicy fields (`spec.dcgmExporter.env`,
-  `spec.dcgmExporter.serviceMonitor.interval`) ask for while the comparison is on. Which of the DCGM label names it
+  second), and from DCGM in the three runs in mode `levels` on OpenShift described below; the three runs with twins
+  under docker measured no energy. On OpenShift the reader found the side pods' power in the cluster's monitoring for
+  every scored level (8 in the first run, 12 in the second, 96 in the full-length run), each from DCGM's energy
+  counter. The first two runs had 15 power samples in each 30-second level: one every 2 seconds, the interval that the
+  pattern's ClusterPolicy fields (`spec.dcgmExporter.env`, `spec.dcgmExporter.serviceMonitor.interval`) ask for while
+  the comparison is on. The full-length run had 30 or 31 power samples in each 60-second level, with the same 2-second
+  interval set in the cluster's own ClusterPolicy, not by the pattern. Which of the DCGM label names it
   matches on (`exported_pod`, `exported_namespace`, `pod`, `Hostname`) the exporter used was not recorded; otherwise the
   reader is tested only against hand-written answers in the documented format (a Prometheus `query_range` matrix).
-- Three comparisons on OpenShift are described here, all complete, on two throwaway clusters on AWS (OpenShift
+- Four comparisons on OpenShift are described here, all complete, on three throwaway clusters on AWS (OpenShift
   4.22.18, three m5.2xlarge nodes that are both control plane and workers, and the pattern's g6.2xlarge node with one
   NVIDIA L4). In each, Argo CD created the Job, the runner's pod ran under the `restricted-v2` security context
-  constraint, the runner scaled the server to 0 and brought it back to one Ready pod, and no side pod was left. Every
-  case got NO VERDICT, as runs without twins must:
+  constraint, the runner scaled the server to 0 and brought it back to one Ready pod, and no side pod was left. The
+  first three had no twins, so every case in them got NO VERDICT, as runs without twins must. The last one, the
+  full-length run, had twins. They were:
   - Mode `levels`, with the comparison code of an earlier commit of `main`: side A upstream `vllm/vllm-openai` v0.33.0,
     side B this pattern's own server from the cluster's internal registry (preset `ray-serve-llm`, vLLM 0.29.0), one
     warm-up launch per side, then 2 rounds without twins, 30 s at each of 1 and 8 concurrent streams. All 6 launches
@@ -910,11 +916,23 @@ per second, over the whole level, is not timed per token.
     ("Picking the surge rate"). It took 21 minutes.
   - Mode `scaleout`, with the code described here apart from the statistics (the pattern's own, from before pairbench
     was added), upstream vLLM v0.32.0 and v0.33.0 ("The benchmark's scale-out mode").
+  - The full-length run, on November 23, 2026, on a new cluster whose owner had already installed Node Feature Discovery
+    and the NVIDIA GPU Operator from OperatorHub. The pattern was installed from a branch with a new setting,
+    `global.gpuOperators: reuse`, that reuses those two Operators instead of installing its own. That setting is now on
+    `main` ([Reuse the cluster's GPU operators](#reuse-the-clusters-gpu-operators)). Mode `levels` with the comparison's
+    default settings: side A upstream `vllm/vllm-openai` v0.33.0, side B this pattern's own server from the cluster's
+    internal registry (preset `ray-serve-llm`, vLLM 0.29.0), one warm-up launch per side, then 8 rounds with twins, 60 s
+    at each of 1, 8 and 32 concurrent streams. All 34 launches finished, in 3 hours 46 minutes, with DCGM energy
+    figures. No engine was started again and no load timed out. All 4 primary cases got a verdict, each in upstream's
+    favor (medians of A and B): time to first answer SLOWER (73.47 s and 200.36 s), the median time to first token at 32
+    streams SLOWER (89.5 ms and 200.1 ms), output tokens per second at 32 streams WORSE (4102 and 2044 tokens/s), and
+    output tokens per joule at 32 streams WORSE (56.9 and 31.6 tokens/J). The two sides differ in both vLLM version and
+    serving stack, so the run does not say which of the two made the difference.
 
-  Not run on OpenShift: twins, the default settings and the length of a run with them, a run that ends partial or is
-  stopped (the stop path and the early restore on a stop), the refusal of a second run, keda mode during a run (the
-  runner's pause), a side with `args` of its own, a `custom` side, a GuideLLM time-out and its new start, a server
-  started again after vLLM's start-up memory check, and a node with more than one GPU. The side pods' security context
+  Not run on OpenShift: a run that ends partial or is stopped (the stop path and the early restore on a stop), the
+  refusal of a second run, keda mode during a run (the runner's pause), a side with `args` of its own, a `custom`
+  side, a GuideLLM time-out and its new start, a server started again after vLLM's start-up memory check, and a node
+  with more than one GPU. The side pods' security context
   constraint was not recorded. Before those runs, the runner's Job, with the chart's RBAC, ran on a plain Kubernetes
   cluster (kind) against GuideLLM's mock server: it scaled a stand-in server to 0 and back, wrote the status ConfigMap
   and the termination message, and, when its Job was deleted mid-launch, recorded the launch as `STOPPED`, deleted the
@@ -924,7 +942,7 @@ per second, over the whole level, is not timed per token.
   the run as partial / `STOPPED` and started the stand-in live server again.
 - DCGM's answers are parsed under both the old and the new DCGM exporter metric names in tests; the runs on OpenShift
   read one of them from a real exporter, which one was not recorded.
-- `ray-serve-llm` sides finished scored launches in the three runs with twins, with and without `args`
+- `ray-serve-llm` sides finished scored launches in the three runs with twins under docker, with and without `args`
   (`--attention-backend FLASHINFER`, and in one run also `--safetensors-load-strategy eager`), but their servers turned
   `args` into engine settings with the earlier form above, not with the syntax and checks in "Run a comparison". The way
   the server now turns `args` into engine settings was run side by side against `vllm serve`'s own parser for vLLM
@@ -938,8 +956,10 @@ per second, over the whole level, is not timed per token.
   engine config on CPU refused the first three of those four and accepted the last; no engine was started. For vLLM
   0.29.0, which this pattern's image pins, only the engine arguments' declared types at that tag were read; nothing was
   run with it.
-- The length of a run with the default settings, and so of the server's outage, is an estimate (about 4 to 6 hours
-  for 34 server starts). The runs with twins, with 5 s of load at one level, do not time it.
+- The length of a run with the default settings, and so of the server's outage, has been timed in one run only: 3 hours
+  46 minutes for 34 server starts, in the full-length run on OpenShift above, with one NVIDIA L4 and the two sides it
+  compared, and the server was Ready again about 3 minutes after the run ended. The runs with twins under docker, with
+  5 s of load at one level, do not time it.
 
 ## Scale out
 
@@ -1367,18 +1387,18 @@ and twin and gets NO VERDICT (`zero_floor`): the run checks the harness, not a r
 
 ## Partner results: Eugo
 
-With empty compile caches, vLLM servers on Eugo's image start sooner than upstream vLLM as shipped, are still sooner
-with plain `vllm serve` when upstream is tuned with an attention setting (both sides loading the weights with
-`--safetensors-load-strategy eager`), and start first time.
+On an NVIDIA DGX Spark, with empty compile caches, vLLM servers on Eugo's image start sooner than upstream vLLM as
+shipped and are still sooner with plain `vllm serve` when upstream is tuned with an attention setting (both sides
+loading the weights with `--safetensors-load-strategy eager`).
 
 *Eugo's next release build against the upstream `vllm/vllm-openai` v0.33.0 image (arm64). The Eugo build runs a vLLM
-development snapshot from upstream's main branch, taken after 0.33.0 branched off (it reports version
-0.33.0rc1.dev391), plus Eugo's fixes. Where a result says so, Eugo's side used a stand-in for part of that build.
-Measured by Eugo on one NVIDIA DGX Spark shared with other jobs, with docker containers (not OpenShift) and
-Qwen2.5-0.5B-Instruct, in paired rounds with an exact sign test under a pass rule set before each run. Every start
-behind these results was a new container whose compile caches started empty, with the model files already in memory
-and the image already on the machine. Each lead is the median of the per-round differences, so it is not the gap
-between the two medians. Your hardware, model and settings will change the numbers.*
+development snapshot from upstream's main branch, taken after 0.33.0 branched off (it reports version 0.33.0rc1.dev391),
+plus Eugo's fixes. Measured by Eugo on one NVIDIA DGX Spark shared with other jobs, with docker containers (not
+OpenShift) and Qwen2.5-0.5B-Instruct, in paired rounds with an exact sign test under a pass rule set before each run.
+Every run gave vLLM 12% of GPU memory, because the NVIDIA DGX Spark's GPU shares its memory with the CPU and with those
+other jobs. Every start behind these results was a new container whose compile caches started empty, with the model
+files already in memory and the image already on the machine. Each lead is the median of the per-round differences, so
+it is not the gap between the two medians. Your hardware, model and settings will change the numbers.*
 
 ### Against upstream as shipped
 
@@ -1391,22 +1411,20 @@ this pattern's server, both sides used vLLM's default weight loading.
 
 | How the servers ran | Set the same on both sides | Upstream median | Eugo median | Eugo answered first | Eugo sooner by (median) |
 |---|---|---|---|---|---|
-| Plain `vllm serve`, container start to the first streamed token | `--safetensors-load-strategy eager`, `--gpu-memory-utilization 0.12`, `--max-model-len 8192`, `--seed 0` | 140.2 s | 48.8 s | 10 of 10 rounds (p = 0.002) | 90.9 s (65%); upstream took 2.9 times as long |
+| Plain `vllm serve`, container start to the first streamed token | `--safetensors-load-strategy eager`, `--gpu-memory-utilization 0.12`, `--max-model-len 8192`, `--seed 0` | 131.3 s | 36.2 s | 12 of 12 rounds (p < 0.001) | 93.6 s (71%); upstream took 3.6 times as long |
 | Plain `vllm serve`, container start to the first streamed token | `--gpu-memory-utilization 0.12` only (vLLM's default weight loading) | 219.4 s | 48.4 s | 12 of 12 rounds (p = 0.001) | 169.5 s (77%); upstream took 4.5 times as long |
-| This pattern's Ray Serve LLM server, container start to the first answer | `gpuMemoryUtilization` 0.12 (12% of GPU memory; the pattern's default is 0.85, or 85%) and an 8,192-token context; vLLM's default weight loading; one 5-second load level at one stream | 242.8 s | 227.5 s | 8 of 8 rounds (p = 0.008) | 19.7 s (8%) |
+| This pattern's Ray Serve LLM server, container start to the first answer | `gpuMemoryUtilization` 0.12 (12% of GPU memory; the pattern's default is 0.85, or 85%) and an 8,192-token context; vLLM's default weight loading; one 5-second load level at one stream | 227.2 s | 69.1 s | 8 of 8 rounds (p = 0.008) | 159.8 s (70%). Upstream's engine was started again in 1 of its 17 launches (Eugo's in none), after vLLM's start-up memory check had stopped it; that launch, in round 1, is one the results count. |
 
 p: each run's own exact sign test. The run with only the 12% GPU memory setting reports its p Holm-corrected, as the
-rule set before that run required. In the eager plain `vllm serve` run, 2 more rounds have no pair: both of upstream's
-tries stopped with out-of-memory errors on the shared machine. Through this pattern's server, the upstream side was
-the v0.33.0 image with Ray 2.60.0 and this pattern's server files added, and one import line in Ray changed for
-vLLM 0.33.
+rule set before that run required. Through this pattern's server, the upstream side was the v0.33.0 image with
+Ray 2.60.0 and this pattern's server files added, and one import line in Ray changed for vLLM 0.33.
 
 Speed once serving, through this pattern's server against upstream as shipped (one stream):
 
 | Measure | Upstream | Eugo | What it shows |
 |---|---|---|---|
-| Time to first token on short prompts, in the 8 start-up rounds above (with the 50 ms bursts that were this server's default when these rounds ran, so most of each figure is the wait for the first burst) | 60.5 ms | 57.7 ms | Eugo lower in 8 of 8 rounds, by 2.8 ms (5%). A secondary measure under the rule: it describes the run and is not a finding. |
-| Time between tokens, in the same rounds (with the same 50 ms bursts) | 3.10 ms | 3.14 ms | A tie. A secondary measure under the rule: it describes the run and is not a finding. The bursts make this figure lower than the real time per token, which the next row measures. |
+| Time to first token on short prompts, in the 8 start-up rounds above (these rounds ran versions of this pattern's server and compare mode from before the "Streamed answers" setting existed, so tokens went out in Ray Serve LLM's default 50 ms bursts, and most of each figure is the wait for the first burst) | 58.3 ms | 55.9 ms | Eugo lower in 8 of 8 rounds, by a median of 2.4 ms. A secondary measure under the rule: it describes the run and is not a finding. |
+| Time between tokens, in the same rounds (with the same 50 ms bursts) | 2.91 ms | 2.97 ms | A tie. A secondary measure under the rule: it describes the run and is not a finding. The bursts make this figure lower than the real time per token, which the next row measures. |
 | Time per output token with the server sending each token as it is generated (the 50 ms bursts turned off, as the server now does by default), in a separate short check (2 starts per side, in both orders) | 5.793 ms | 5.797 ms | A tie: 0.004 ms (0.1%) apart, inside the check's 0.040 ms noise bar (the largest gap between the two starts of any one server setup in the check, under a rule set before it ran). |
 
 The time per output token is a tie, and most of it is set by the hardware here. At one stream, each output token
@@ -1422,31 +1440,39 @@ Upstream was given one of three attention settings; the Eugo build still chose i
 `vllm serve`, container start to the first streamed token; both sides loaded the weights with
 `--safetensors-load-strategy eager`.
 
-| Against upstream vLLM 0.33.0 | Eugo answered first | Eugo sooner by (median) |
-|---|---|---|
-| With `--attention-backend FLASHINFER` and `--attention-config '{"use_trtllm_attention": false}'` | 11 of 11 rounds (p = 0.003) | 10.9 s (18%) |
-| With `--attention-backend TRITON_ATTN` | 9 of 9 rounds (p = 0.004) | 12.0 s (20%) |
-| With `--attention-backend FLASHINFER` | 10 of 10 rounds (p = 0.004) | 16.4 s (25%) |
+| Against upstream vLLM 0.33.0 | Upstream median | Eugo median | Eugo answered first | Eugo sooner by (median) |
+|---|---|---|---|---|
+| With `--attention-backend FLASHINFER` and `--attention-config '{"use_trtllm_attention": false}'` | 50.2 s | 41.1 s | 12 of 12 rounds (p = 0.001) | 10.8 s (21%) |
+| With `--attention-backend TRITON_ATTN` | 51.1 s | 41.1 s | 12 of 12 rounds (p = 0.001) | 14.1 s (28%) |
+| With `--attention-backend FLASHINFER` | 57.4 s | 41.1 s | 12 of 12 rounds (p = 0.001) | 17.5 s (30%) |
 
-p: exact sign test, Holm-corrected across the three upstream settings. A round in which upstream's start-up memory
-check stopped both of its tries has no pair.
+p: exact sign test, Holm-corrected across the three upstream settings. All three rows compare against one Eugo side,
+run in the same 12 rounds, so its median is the same in each row.
 
 Through this pattern's Ray Serve LLM server, with the same 12% GPU memory setting, context length and load as the
 server row of the first table, Eugo gave its first answer sooner than upstream with `--attention-backend FLASHINFER`
 and `--safetensors-load-strategy eager`. It was sooner in 8 of 8 paired rounds (p = 0.008, that run's own exact sign
-test), by a median of 15.4 s (17%); the medians were 90.0 s for upstream and 73.8 s for Eugo. In that run, Eugo's side
-used vLLM's default weight loading and a stand-in for part of Eugo's next release build.
+test), by a median of 12.6 s (16%); the medians were 79.4 s for upstream and 66.5 s for Eugo. In that run, Eugo's side
+used vLLM's default weight loading.
 
 ### Starts that succeed first time
 
-In the tuned plain `vllm serve` runs, on the same busy machine, vLLM's start-up memory check stopped 12 of 33 upstream
-first tries (15 of 45 starts counting retries) and 0 of 11 Eugo first tries. Through this pattern's server, in the run
-behind the first table's server row, the same check restarted upstream's engine in 2 of 17 launches and Eugo's in
-none; those restarts count in that run's start-up times. In the first table's run with only the 12% GPU memory
-setting, every upstream and Eugo start succeeded on its first try (12 of 12 starts each).
+In the tuned plain `vllm serve` runs, on the same shared machine, vLLM's start-up memory check stopped 2 of 36 upstream
+first tries (2 of 38 starts counting retries) and 0 of 12 Eugo first tries, too few to show a difference by Fisher's
+exact test. Through this pattern's server, the same check restarted upstream's engine in 1 of its 17 launches, and
+Eugo's in none, in each of two runs: the run behind the first table's server row (in round 1) and the run against
+upstream with `--attention-backend FLASHINFER`. Each restart counts in its run's start-up times. In the first table's
+run with only the 12% GPU memory setting, every upstream and Eugo start succeeded on its first try (12 of 12 starts
+each).
 
-Not yet measured: OpenShift, a new node, `compileCache.mode: node` or `shared` on a cluster, larger models, other
-GPUs. Once Eugo's next release build is out, compare mode's start-up case (`startup/first_answer_s`) can rerun these.
+Four of the runs behind this section were repeated with a newer image of Eugo's next release build, with upstream's
+images and settings unchanged. The first table's server row moved the most, from 19.7 s (8%) to 159.8 s (70%),
+because its earlier run used an older Eugo image. In the tuned runs, vLLM's start-up memory check stopped 12 of 33
+upstream first tries before and 2 of 36 in the repeated runs, with the same upstream image. The repeated runs ran while
+other jobs loaded the machine far less, and that check stops a start when another process frees memory during it.
+
+Not yet measured: OpenShift, a new node, `compileCache.mode: node` or `shared` on a cluster, other GPUs. Once Eugo's
+next release build is out, compare mode's start-up case (`startup/first_answer_s`) can rerun these.
 
 ## Changing the model
 
@@ -1501,9 +1527,18 @@ software this pattern deploys, and their use does not imply endorsement.
 
 ## What this pattern was verified against
 
-The installs below ran before the pattern and its namespaces were renamed, under its old name
+The first install below ran after the pattern and its namespaces were renamed. The others ran before, under its old name
 `rhvp-vllm-ray-inference-server`, which shows below where the installer used it.
 
+- **A fresh install on AWS after the rename** (November 21, 2026): a new installer-provisioned cluster with OpenShift
+  4.22.18, x86_64, region us-east-1. The pattern was installed with `./pattern.sh make install` from `main` at commit
+  `4e071af` with the default settings in `values-global.yaml`. The command's own health check passed, with all seven
+  Argo CD applications Synced and Healthy; the MachineSet job created the g6.2xlarge node with one NVIDIA L4; the
+  cluster built both images; and the server pod turned Ready and answered `GET /v1/models` and a chat completion. The
+  notebook pod ran; the notebook itself was not run on this cluster. Afterwards, this cluster ran the first comparison
+  on OpenShift in "What has not been checked" (mode `levels`, with this pattern's own server as side B) and the runs
+  of both autoscalers in "What has not been checked for scale out"; the second and third comparisons on OpenShift
+  described there ran on another throwaway cluster.
 - **A fresh install on AWS** (November 2026): a new installer-provisioned compact cluster, not changed after the
   installer ran: OpenShift 4.22.18, x86_64, region us-east-1, three m5.2xlarge nodes that are both control plane and
   workers. The pattern was installed from `main` at commit `1a781d1` with the default settings in
