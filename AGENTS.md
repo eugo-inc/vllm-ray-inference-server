@@ -24,8 +24,8 @@ one OpenShift cluster:
   itself from `inference-server/`, using stock packages only: PyPI wheels on NVIDIA's CUDA UBI 9 image. There is no
   KubeRay and no OpenShift AI.
 - **GPU enablement.** Node Feature Discovery and the NVIDIA GPU Operator, installed by the pattern
-  (`global.gpuOperators: install`, the default) or the cluster's own (`reuse`, not yet run on a cluster; "Installing
-  or reusing the GPU operators" below). On AWS, an imperative job also creates one GPU node (see above).
+  (`global.gpuOperators: install`, the default) or the cluster's own (`reuse`, run on one test cluster so far;
+  "Installing or reusing the GPU operators" below). On AWS, an imperative job also creates one GPU node (see above).
 - **Secrets.** HashiCorp Vault plus the External Secrets Operator carry an optional Hugging Face token.
 - **A notebook.** A small JupyterLab behind OpenShift login. Its notebook times the server.
 - **An image comparison**, off by default (`global.compare`). A Job compares two inference-server images on the
@@ -711,13 +711,18 @@ interval shows only as each level's note ("N power samples in the window; at lea
 way. The runner's scale-out node check (`KubeBackend.check_plan`) names the cluster's ClusterPolicy in its time-slicing
 hints, and names GPU feature discovery instead when no GPU node of the sides' CPU type has its count label.
 
-Not checked yet: any of this on a cluster. Only renders, the values checks and unit tests have run. Switching a
-running install is not supported and has not been tried. From `install` to `reuse` nothing is removed, as the apps
-sync without pruning: the pattern's operator Namespaces, OperatorGroups and Subscriptions stay, no longer updated, and
-its `nfd-config` and `nvidia-gpu-config` Applications stay with their automated sync and keep applying the
-NodeFeatureDiscovery and ClusterPolicy from Git (the two charts still render them when `values-global.yaml` says
-`reuse`). Both Applications carry Argo CD's foreground resources finalizer, so deleting them deletes those two
-objects. From `reuse` to `install` adds a second copy of both operators.
+Run on a cluster once, on November 23, 2026 (the README's "Where this has run" says what was set up and checked): a
+new OpenShift 4.22.18 cluster on AWS, NFD and the GPU Operator from OperatorHub, the pattern's own GPU node, no
+time-slicing, then the install and an image comparison of 8 rounds. The cluster's ClusterPolicy, NodeFeatureDiscovery,
+Subscriptions, OperatorGroups and namespaces kept their uid, generation, spec and owners throughout, and no Argo CD
+application managed them. Not checked yet: a cluster that runs OpenShift AI, GPU nodes the pattern did not create,
+time-slicing or MIG in the cluster's ClusterPolicy (so keda mode and the comparison's scale-out mode with `reuse`),
+and uninstalling. Switching a running install is not supported and has not been tried. From `install` to `reuse`
+nothing is removed, as the apps sync without pruning: the pattern's operator Namespaces, OperatorGroups and
+Subscriptions stay, no longer updated, and its `nfd-config` and `nvidia-gpu-config` Applications stay with their
+automated sync and keep applying the NodeFeatureDiscovery and ClusterPolicy from Git (the two charts still render them
+when `values-global.yaml` says `reuse`). Both Applications carry Argo CD's foreground resources finalizer, so deleting
+them deletes those two objects. From `reuse` to `install` adds a second copy of both operators.
 
 ## How to deploy
 
@@ -733,7 +738,7 @@ it to sync.
     with its own OperatorGroups and settings, and would clash with existing installs of them.
   - a cluster that already runs both, such as an OpenShift AI GPU cluster, with `global.gpuOperators: reuse` set in
     your fork before you install. Their ClusterPolicy must provide what the README, "Reuse the cluster's GPU
-    operators", lists. This has not been run on a cluster yet.
+    operators", lists. This has run on one test cluster so far.
 
   The pattern has not been tried on a cluster that runs OpenShift AI.
 - A StorageClass that provisions volumes dynamically, for the model PVC.

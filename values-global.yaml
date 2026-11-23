@@ -29,8 +29,8 @@ global:
   #   reuse   - the install adds none of that and uses the two operators the
   #             cluster already runs, as an OpenShift AI GPU cluster does. It
   #             does not change, label or delete them; README, "Reuse the
-  #             cluster's GPU operators", lists what they must provide. Not yet
-  #             run on a cluster.
+  #             cluster's GPU operators", lists what they must provide and
+  #             where this has run (one test cluster, November 2026).
   # Any other value, or none, installs neither operator, and the server's app
   # fails to render with a message that names this setting.
   # Set it in your fork BEFORE you install. Switching a running install is not

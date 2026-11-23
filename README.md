@@ -48,8 +48,8 @@ no OpenShift AI subscription.
   GPU Operator itself, with its own OperatorGroups and settings, so it needs a cluster that runs neither. On a cluster
   that already runs both, such as an OpenShift AI GPU cluster, set `global.gpuOperators: reuse`: the pattern then
   uses those and changes nothing of them
-  ([Reuse the cluster's GPU operators](#reuse-the-clusters-gpu-operators)). Reuse has not been run on a cluster
-  yet, and the pattern has not been tried on a cluster that runs OpenShift AI.
+  ([Reuse the cluster's GPU operators](#reuse-the-clusters-gpu-operators)). Reuse has run on one test cluster so
+  far, and the pattern has not been tried on a cluster that runs OpenShift AI.
 
 > [!WARNING]
 > **Cost.** On AWS, the default install creates **one billable GPU instance: `g6.2xlarge` with one NVIDIA L4**.
@@ -200,8 +200,8 @@ version 580 or newer.
     with its own OperatorGroups and settings, and would clash with existing installs of them.
   - a cluster that already runs both, such as an OpenShift AI GPU cluster, with `global.gpuOperators: reuse` set in
     your fork before you install. Their ClusterPolicy must provide what
-    [Reuse the cluster's GPU operators](#reuse-the-clusters-gpu-operators) lists. This has not been run on a
-    cluster yet.
+    [Reuse the cluster's GPU operators](#reuse-the-clusters-gpu-operators) lists. This has run on one test
+    cluster so far.
 
   The pattern has not been tried on a cluster that runs OpenShift AI.
 - A StorageClass that provisions volumes dynamically, for the model cache.
@@ -223,8 +223,9 @@ version 580 or newer.
 Set `global.gpuOperators: reuse` in `values-global.yaml` in your fork, and push it, before you install. The install
 then creates no namespace, OperatorGroup or Subscription for Node Feature Discovery or the NVIDIA GPU Operator, no
 NodeFeatureDiscovery and no ClusterPolicy (it has no `nfd-config` or `nvidia-gpu-config` app), and it changes,
-labels and deletes nothing of the operators the cluster already runs. **This has not been run on a cluster yet:**
-what follows comes from the charts' renders and from NVIDIA's and Red Hat's documentation.
+labels and deletes nothing of the operators the cluster already runs. It has run on one test cluster so far
+("Where this has run" below). The rest of this section comes from the charts' renders and from NVIDIA's and Red
+Hat's documentation.
 
 What the cluster's installs must provide:
 
@@ -274,6 +275,22 @@ longer updated, and its `nfd-config` and `nvidia-gpu-config` apps stay and keep 
 ClusterPolicy from Git, so the pattern's ClusterPolicy still follows your fork. Deleting those two apps deletes the
 NodeFeatureDiscovery and the ClusterPolicy with them. From `reuse` to `install` adds a second copy of both operators
 next to the cluster's.
+
+**Where this has run.** Once, on November 23, 2026, on a new OpenShift 4.22.18 cluster on AWS (us-east-1). Before
+the pattern, Node Feature Discovery 4.22.0 and the NVIDIA GPU Operator 26.7.3 came from OperatorHub, with the
+NodeFeatureDiscovery and the ClusterPolicy from each operator's own example, plus what this section asks of the
+ClusterPolicy: a toleration for the GPU taint, GPU feature discovery on, and the DCGM exporter sampling every 2
+seconds with its ServiceMonitor. No time-slicing. The pattern was then installed with `reuse` and every other setting
+at its default, so it added its own g6.2xlarge GPU node with one NVIDIA L4. All five Argo CD applications (the four
+apps plus the clustergroup app) were Synced and Healthy, with no `nfd-config` or `nvidia-gpu-config` among them. The
+ClusterPolicy was `ready` with driver 595.91.07, the GPU node offered one `nvidia.com/gpu`, and the server answered.
+The cluster's ClusterPolicy, NodeFeatureDiscovery, Subscriptions, OperatorGroups and namespaces kept the same uid,
+generation, spec and owners through the install and through an image comparison of 8 rounds on that GPU after it,
+and no Argo CD application managed any of them. Every scored load level of that comparison got a tokens-per-joule
+figure from the cluster's DCGM exporter, with 30 or 31 power samples each. Not run: a cluster that runs OpenShift AI,
+GPU nodes the pattern did not create (`gpuMachineSet: none`, a taint key other than `nvidia.com/gpu`), time-slicing
+or MIG in the cluster's ClusterPolicy (so keda mode and the comparison's scale-out mode), switching a running
+install, and uninstalling.
 
 ## Quick start
 
@@ -1521,4 +1538,5 @@ The installs below ran before the pattern and its namespaces were renamed, under
 - **Not checked:** OpenShift versions before 4.22; a gated model with a real Hugging Face token; the optional server
   Route; changing the model; `image.override`; an arm64 GPU node on OpenShift; other clouds and bare metal; GPUs
   other than the L4 (see [GPU support](AGENTS.md#gpu-support)); the web-console install; private forks;
-  `./pattern.sh make uninstall`; `global.gpuOperators: reuse` on a cluster that already runs both GPU operators.
+  `./pattern.sh make uninstall`; `global.gpuOperators: reuse` beyond its one test in
+  [Reuse the cluster's GPU operators](#reuse-the-clusters-gpu-operators).
