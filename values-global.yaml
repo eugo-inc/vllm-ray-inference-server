@@ -69,8 +69,9 @@ global:
   # launch (the comparison needs its GPU and its model volume) and back to 1
   # when the run ends, whether it finished, failed or was stopped. With the
   # defaults below a run is 8 rounds of 4 server starts plus 2 warm-up starts:
-  # 34 server starts. We estimate about 4 to 6 hours on one GPU, but have not
-  # timed it on a cluster.
+  # 34 server starts. One such run took 3 hours 46 minutes on OpenShift with
+  # one NVIDIA L4 (upstream vLLM 0.33.0 against this pattern's server); other
+  # sides start faster or slower, so plan for your own.
   #
   # When on:
   #   - a Job in vllm-notebook starts the servers one at a time, each as a pod
@@ -128,8 +129,10 @@ global:
       # one of 8 rounds to lean the same way with the 4 default primary cases
       # (fewer than 8 rounds give them NO VERDICT; the plan warns). 8, 16 and 24
       # rounds put every entry in every position equally often.
-      # 8 rounds: 34 server starts with the warm-up, about 4 to 6 hours.
-      # 16 rounds: 66 server starts, about 8 to 12 hours.
+      # 8 rounds: 34 server starts with the warm-up, 3 hours 46 minutes in the
+      # one timed run (README, "What has not been checked").
+      # 16 rounds: 66 server starts, about 7 hours 20 minutes scaled from that
+      # run; not timed, and it depends on the sides' start times.
       count: 8
       # One unmeasured launch per side first: pulls the image, fills the model
       # cache.

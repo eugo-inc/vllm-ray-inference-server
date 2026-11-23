@@ -490,7 +490,8 @@ With the default settings a run is 8 rounds of 4 server starts, plus one warm-up
 Each measured start is followed by three 60-second load levels, the power read and the teardown. One run with these
 settings has been timed on a cluster: it took 3 hours 46 minutes on OpenShift with one NVIDIA L4, with upstream vLLM
 0.33.0 and this pattern's server as the sides (the full-length run in "What has not been checked"). For 16 rounds (66
-starts) we estimate about 8 to 12 hours; no run of that length has been timed.
+starts), scaling that run gives about 7 hours 20 minutes with the same two sides. That figure is scaled, not timed: no
+run of that length has been timed, and it depends on how long each side takes to start.
 
 The `ray-serve-llm` app ignores the Deployment's `replicas` on every install, also when the comparison is off: a sync
 never changes the server's replica count. That keeps a sync during a run from bringing the server back early, and
