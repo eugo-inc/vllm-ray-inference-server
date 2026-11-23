@@ -374,8 +374,10 @@ and uses a serving certificate; the Route uses `reencrypt` termination.
   `refusals`, `notes`, `outcomes`). Another tool that takes the same rows and writes the same `analysis` shape can
   replace `analyze.py` and `stats.py`. `results.schema.json` is version `rhvp-image-compare/2`; the notebook skips a
   file of another version with a notice.
-- Run length with the defaults: 8 rounds of 4 launches plus 2 warm-ups, 34 server starts, an estimate of about 4 to
-  6 hours (16 rounds: 66 starts, about 8 to 12 hours). Unmeasured on any cluster. The Job's
+- Run length with the defaults: 8 rounds of 4 launches plus 2 warm-ups, 34 server starts, timed once at 3 hours 46
+  minutes (the full-length run on OpenShift, one NVIDIA L4, upstream vLLM 0.33.0 against the `inference-server/` image).
+  16 rounds (66 starts) scale to about 7 hours 20 minutes with the same sides: untimed, and it depends on the sides'
+  start times. The Job's
   `activeDeadlineSeconds` (48 h) and the per-launch side deadline (`kube.side_deadline`) and stop budget do not
   depend on the number of launches.
 - Every sentence the comparison notebook shows is in `rhvp_compare/words.py`.
@@ -419,33 +421,39 @@ those logs), the pattern's default model length (8192) and vLLM's own source lin
 are the pattern's ready file (`/tmp/r/rhvp-ready`) and listen address (`http://0.0.0.0:8000/`), and no line is a copy of
 a line of those logs.
 Later runs with real servers under the twin rule, one of them with a warm compile cache, are not among the three.
-Checked on OpenShift in the three runs described here (4.22.18, two throwaway clusters on AWS, each with the pattern's
-g6.2xlarge node with one NVIDIA L4), without twins, each complete with every case NO VERDICT: mode `levels` with the
-comparison code of an earlier commit of `main`, upstream `vllm/vllm-openai` v0.33.0 (A) against the image the cluster
-builds from `inference-server/` (B, preset `ray-serve-llm`, vLLM 0.29.0, from the internal registry), one warm-up launch
-per side and 2 rounds, 30 s at 1 and 8 streams (6 launches in 29 minutes; B's `engine_restarts`, which only a
-`ray-serve-llm` side counts, 0 in each); mode `levels` with upstream vLLM v0.32.0 and v0.33.0, 1 round without a
-warm-up, 30 s at each of 1, 4, 8, 16, 32 and 64 streams (21 minutes); and mode `scaleout` with the code as it
-stood just before the statistics came from pairbench ("How scale out works"). In each, Argo CD created the Job, the
-runner pod ran under the `restricted-v2` SCC, the server went
-to 0 and back to one Ready pod, and no side pod was left. The `notebook` app showed Progressing while a Job ran, Healthy
-once one had succeeded, and OutOfSync while an earlier run's Job and its config ConfigMap were still there (no pruning).
-Both `levels` runs got tokens per joule from DCGM for every scored level (8 and 12), each from the energy counter with
-15 power samples in its 30 s, so the 2 s interval held; which of the DCGM label names matched was not recorded. The
-server records of OpenShift sides carry no server environment (`env_source: "none"`).
-Not checked yet: the twin rule with real servers beyond those three runs: with a `vllm-openai` or `custom` side, on the
-image `inference-server/` builds (vLLM 0.29.0), with the example's settings and default primary cases, with energy, with
-`SERVER_CONTAINER`, with the current `serve_app.engine_flags` and the runner's later changes
-(`engine_restarts` among them), and on more than one machine, GPU or model; on OpenShift, twins, a run that ends partial
-or is stopped, the refusal of a second run, keda mode during a run, a side with `args` of its own, and the side pods'
-SCC (not recorded); the DCGM reader against an exporter other than the one on those clusters, and which of its label
-names (`exported_pod`, `exported_namespace`, `pod`, `Hostname`) a real exporter uses; the length of a run with the
-defaults (an estimate of about 4 to 6 hours; none of the runs above times it); a launch whose GuideLLM timed out again
-in its second try (`LOAD_FAILED`), which none of the runs above had; an engine restart count above 0 with vLLM 0.29.0
-or on Kubernetes (the unit tests' logs have vLLM 0.33.0's line shapes and their backend is a fake); and the engine
-restart count inside the second replica of mode `scaleout` and for a Ray Serve LLM server that exits once Ray Serve
-gives up after replicas stopped at the check (the carry-over into the start again), which only the fake backend of the
-unit tests has gone through.
+Checked on OpenShift in the four runs described here (4.22.18, three throwaway clusters on AWS, each with the pattern's
+g6.2xlarge node with one NVIDIA L4), each complete. The first three had no twins, so every case in them got NO VERDICT:
+mode `levels` with the comparison code of an earlier commit of `main`, upstream `vllm/vllm-openai` v0.33.0 (A) against
+the image the cluster builds from `inference-server/` (B, preset `ray-serve-llm`, vLLM 0.29.0, from the internal
+registry), one warm-up launch per side and 2 rounds, 30 s at 1 and 8 streams (6 launches in 29 minutes; B's
+`engine_restarts`, which only a `ray-serve-llm` side counts, 0 in each); mode `levels` with upstream vLLM v0.32.0 and
+v0.33.0, 1 round without a warm-up, 30 s at each of 1, 4, 8, 16, 32 and 64 streams (21 minutes); and mode `scaleout`
+with the code as it stood just before the statistics came from pairbench ("How scale out works"). The fourth, the
+full-length run (November 23, 2026), was on a cluster whose owner had already installed Node Feature Discovery and the
+NVIDIA GPU Operator, with the pattern installed with `global.gpuOperators: reuse`: mode `levels` with the comparison's
+default settings, the same A and B as the first run, one warm-up launch per side, then 8 rounds with twins, 60 s at each
+of 1, 8 and 32 streams. All 34 launches finished, in 3 hours 46 minutes; no engine was started again and no load timed
+out. All 4 primary cases got a verdict, each in upstream's favor; the two sides differ in both vLLM version and serving
+stack, so the run does not say which made the difference. The server was Ready again about 3 minutes after the run
+ended. In each of the four, Argo CD created the Job, the runner pod ran under the `restricted-v2` SCC, the server went
+to 0 and back to one Ready pod, and no side pod was left. In the first three, the `notebook` app showed Progressing
+while a Job ran, Healthy once one had succeeded, and OutOfSync while an earlier run's Job and its config ConfigMap were
+still there (no pruning). The three `levels` runs got tokens per joule from DCGM for every scored level (8, 12 and 96),
+each from the energy counter: 15 power samples in each 30 s level in the first two, 30 or 31 in each 60 s level in the
+full-length run, so the 2 s interval held (in the full-length run it was set in the cluster's own ClusterPolicy, not by
+the pattern); which of the DCGM label names matched was not recorded. The server records of OpenShift sides carry no
+server environment (`env_source: "none"`).
+Not checked yet: the twin rule with real servers beyond those runs: with a `custom` side, with `SERVER_CONTAINER`, with
+the current `serve_app.engine_flags` and the runner's later changes (`engine_restarts` among them), and on more than one
+machine, GPU or model; on OpenShift, a run that ends partial or is stopped, the refusal of a second run, keda mode during
+a run, a side with `args` of its own, and the side pods' SCC (not recorded); the DCGM reader against an exporter other
+than the one on those clusters, and which of its label names (`exported_pod`, `exported_namespace`, `pod`, `Hostname`) a
+real exporter uses; the length of a run beyond the one full-length run (other sides, other GPUs, or 16
+rounds, all untimed); a launch whose GuideLLM timed out again in its second try (`LOAD_FAILED`), which none of the
+runs above had; an engine restart count above 0 with vLLM 0.29.0 or on Kubernetes (the unit tests' logs have vLLM
+0.33.0's line shapes and their backend is a fake); and the engine restart count inside the second replica of mode
+`scaleout` and for a Ray Serve LLM server that exits once Ray Serve gives up after replicas stopped at the check (the
+carry-over into the start again), which only the fake backend of the unit tests has gone through.
 
 ### How scale out works
 
