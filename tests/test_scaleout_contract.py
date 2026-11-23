@@ -54,6 +54,14 @@ def chart_values(**over) -> dict:
     return merge(merge(copy.deepcopy(SERVER_VALUES), GLOBAL), over)
 
 
+GPU_VALUES = yaml.safe_load((REPO / "charts/all/nvidia-gpu-config/values.yaml").read_text())
+
+
+def gpu_values(**over) -> dict:
+    """The GPU chart's values as Helm sees them with values-global.yaml, plus `over`."""
+    return merge(merge(copy.deepcopy(GPU_VALUES), GLOBAL), over)
+
+
 # ---- keys and defaults ------------------------------------------------------------------------
 
 
@@ -73,11 +81,14 @@ def test_defaults_change_nothing():
     assert SERVER_VALUES["global"]["scaleOut"]["mode"] == "none"
     assert GLOBAL["global"]["scaleOut"]["mode"] == "none"
     assert GLOBAL["global"]["compare"]["mode"] == "levels"
+    assert GLOBAL["global"]["gpuOperators"] == "install"
     assert pattern_settings.check(chart_values()) == []
+    assert pattern_settings.check_gpu_config(gpu_values()) == []
 
 
 def test_values_check_names_every_mode():
     assert pattern_settings.SCALE_OUT_MODES == ("none", "keda")
+    assert pattern_settings.GPU_OPERATORS == ("install", "reuse")
     assert pattern_settings.COMPARE_MODES == plans.MODES == ("levels", "scaleout")
     assert pattern_settings.COMPILE_CACHE_MODES == ("none", "node", "shared")
 
@@ -140,6 +151,28 @@ STREAM_INTERVAL = ("server.streamBatchingIntervalMs must be null, 0, or a number
 def test_values_check_refuses(over, message):
     problems = pattern_settings.check(chart_values(**over))
     assert len(problems) == 1 and message in problems[0], problems
+
+
+GPU_OPERATORS = "global.gpuOperators must be install or reuse; got "
+
+
+@pytest.mark.parametrize("over, refused", [
+    ({"global": {"gpuOperators": "reuse"}}, None),
+    ({"global": {"gpuOperators": "install"}, "timeSlicing": {"enabled": True}}, None),
+    ({"global": {"gpuOperators": "reuse"}, "timeSlicing": {"enabled": True}}, pattern_settings.TIME_SLICING_REUSE),
+    ({"global": {"gpuOperators": "Reuse"}}, GPU_OPERATORS + "Reuse"),
+    ({"global": {"gpuOperators": None}}, GPU_OPERATORS + "<nil>"),
+    ({"global": {"gpuOperators": True}}, GPU_OPERATORS + "true"),
+])
+def test_gpu_operator_check(over, refused):
+    problems = pattern_settings.check_gpu_config(gpu_values(**over))
+    if refused is None:
+        assert problems == []
+        return
+    assert len(problems) == 1 and problems[0].startswith(refused)
+    # Any value other than install or reuse would install neither operator: the message says so.
+    if refused.startswith(GPU_OPERATORS):
+        assert problems[0].endswith("installs neither Node Feature Discovery nor the NVIDIA GPU Operator)")
 
 
 def test_the_shared_gpu_reserve_is_the_same_everywhere():
@@ -240,9 +273,9 @@ def test_the_helm_loader_reads_every_values_file_as_before():
         assert yaml.load(text, Loader=HELM_LOADER) == yaml.safe_load(text), path
 
 
-def validate_values(tmp_path, rel: str, old: str, new: str) -> subprocess.CompletedProcess:
-    """scripts/validate-values.sh on a copy of the repo with `old` replaced by `new` in `rel` (needs its pinned
-    schemas from the network: skips without them)."""
+def validate_values(tmp_path, rel: str, old: str, new: str, also=()) -> subprocess.CompletedProcess:
+    """scripts/validate-values.sh on a copy of the repo with `old` replaced by `new` in `rel`, and each further
+    (rel, old, new) in `also` (needs its pinned schemas from the network: skips without them)."""
     copy_root = tmp_path / "repo"
     for name in subprocess.run(["git", "ls-files"], cwd=REPO, capture_output=True, text=True,
                                check=True).stdout.split():
@@ -252,9 +285,10 @@ def validate_values(tmp_path, rel: str, old: str, new: str) -> subprocess.Comple
     for name in ("scripts/pattern_settings.py", "scripts/validate-values.sh", "values-global.yaml",
                  "charts/all/ray-serve-llm/values.yaml"):
         shutil.copy(REPO / name, copy_root / name)
-    text = (copy_root / rel).read_text()
-    assert text.count(old) == 1
-    (copy_root / rel).write_text(text.replace(old, new))
+    for path, before, after in ((rel, old, new), *also):
+        text = (copy_root / path).read_text()
+        assert text.count(before) == 1
+        (copy_root / path).write_text(text.replace(before, after))
     proc = subprocess.run([str(copy_root / "scripts/validate-values.sh")], capture_output=True, text=True,
                           env={**os.environ, "PYTHON": sys.executable}, timeout=300)
     if "sha256" in proc.stderr or "urlopen" in proc.stderr or "URLError" in proc.stderr:
@@ -268,6 +302,56 @@ def test_values_check_runs_in_validate_values(tmp_path):
                            "  scaleOut:\n    mode: hpa\n")
     assert proc.returncode == 1
     assert "scale-out settings, AWS: global.scaleOut.mode must be none or keda; got hpa" in proc.stderr
+
+
+def test_gpu_operator_check_runs_in_validate_values(tmp_path):
+    """validate-values.sh refuses a misspelled global.gpuOperators, which would install neither GPU operator."""
+    proc = validate_values(tmp_path, "values-global.yaml", "  gpuOperators: install\n", "  gpuOperators: Reuse\n")
+    assert proc.returncode == 1
+    assert "GPU operator settings, AWS: global.gpuOperators must be install or reuse; got Reuse" in proc.stderr
+
+
+def test_missing_gpu_operators_stops_validate_values(tmp_path):
+    """A fork that drops global.gpuOperators would install neither GPU operator. validate-values.sh stops before its
+    GPU operator check, when it fills in the sharedValueFiles entry that needs the value, with a message of its own
+    that names the setting."""
+    proc = validate_values(tmp_path, "values-global.yaml", "  gpuOperators: install\n", "")
+    assert proc.returncode == 1
+    assert ("sharedValueFiles entry '/overrides/values-gpu-operators-{{ $.Values.global.gpuOperators }}.yaml' needs "
+            "global.gpuOperators, which is not set") in proc.stderr
+    assert "GPU operator settings" not in proc.stdout + proc.stderr
+
+
+TIME_SLICING_ON =("charts/all/nvidia-gpu-config/values.yaml", "timeSlicing:\n  enabled: false\n",
+                   "timeSlicing:\n  enabled: true\n")
+
+
+def test_time_slicing_with_install_passes_validate_values(tmp_path):
+    """With global.gpuOperators install (the default), time-slicing is the documented way to fit two server pods on
+    one GPU: the reuse cases that validate-values.sh adds itself must not refuse it."""
+    proc = validate_values(tmp_path, *TIME_SLICING_ON)
+    assert proc.returncode == 0, proc.stderr
+    assert "ok   GPU operator settings, AWS, gpuOperators=reuse" in proc.stdout
+
+
+def test_time_slicing_with_reuse_is_refused_in_validate_values(tmp_path):
+    """With global.gpuOperators reuse the cluster renders no app for the GPU chart, so validate-values.sh refuses its
+    time-slicing, which would otherwise silently not happen."""
+    proc = validate_values(tmp_path, "values-global.yaml", "  gpuOperators: install\n", "  gpuOperators: reuse\n",
+                           also=[TIME_SLICING_ON])
+    assert proc.returncode == 1
+    assert f"GPU operator settings, AWS: {pattern_settings.TIME_SLICING_REUSE}" in proc.stderr
+    # The install file is still used, by the cases with the other value.
+    assert "no sharedValueFiles entry includes it" not in proc.stderr
+    assert "ok   GPU operator settings, AWS, gpuOperators=install" in proc.stdout
+
+
+def test_reuse_in_values_global_passes_validate_values(tmp_path):
+    """A fork that sets global.gpuOperators reuse passes; the cases with the other value still use the install
+    file."""
+    proc = validate_values(tmp_path, "values-global.yaml", "  gpuOperators: install\n", "  gpuOperators: reuse\n")
+    assert proc.returncode == 0, proc.stderr
+    assert "ok   GPU operator settings, AWS, gpuOperators=install, scaleOut.mode=keda" in proc.stdout
 
 
 @pytest.mark.parametrize("written, refusal", [
@@ -311,6 +395,9 @@ def test_validate_values_reads_exponent_numbers_as_helm_does(tmp_path, written, 
     ("stream-interval-huge", STREAM_INTERVAL + "; got 1e+21 (float64)"),
     ("compare-mode-unknown",
      "global.compare.mode must be levels or scaleout; got surge"),
+    ("gpu-operators-unknown", pattern_settings.GPU_OPERATORS_REFUSED.format(value="Reuse")),
+    ("gpu-operators-missing", pattern_settings.GPU_OPERATORS_REFUSED.format(value="<nil>")),
+    ("reuse-timeslicing", pattern_settings.TIME_SLICING_REUSE),
 ])
 def test_charts_refuse_with_the_values_check_message(render, case, message):
     assert message in (render / f"refused/{case}.txt").read_text()

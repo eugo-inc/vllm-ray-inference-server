@@ -3,9 +3,11 @@
 #
 # 1. Merges the values files the way the cluster does (values-global.yaml, then
 #    variants/<variant>/values-<variant>.yaml, then every clusterGroup.sharedValueFiles
-#    entry that exists for the case) for four cases: AWS with global.gpuMachineSet from
-#    values-global.yaml, AWS with gpuMachineSet none, GCP, and AWS with global.scaleOut.mode
-#    keda. Each merged tree is checked against the clustergroup chart's values.schema.json.
+#    entry that exists for the case) for six cases: AWS with global.gpuMachineSet from
+#    values-global.yaml, AWS with gpuMachineSet none, GCP, AWS with global.scaleOut.mode
+#    keda, AWS with the other global.gpuOperators value (reuse, or install when
+#    values-global.yaml says reuse), and AWS with both. Each merged tree is checked
+#    against the clustergroup chart's values.schema.json.
 #    Maps merge; lists and plain values in a later file replace earlier ones. Every file
 #    under overrides/ must be used by at least one case, so a misspelt override name fails
 #    here, and every value a sharedValueFiles entry names must be set (a missing nested one,
@@ -24,7 +26,11 @@
 # 4. Checks the scale-out settings (scripts/pattern_settings.py) for each case of step 1:
 #    the server chart's values.yaml with that case's values files merged over it. It
 #    refuses any global.scaleOut.mode other than none or keda, the same way the server
-#    chart's render does.
+#    chart's render does. It also checks the GPU chart's values.yaml under the same files:
+#    global.gpuOperators must be install or reuse (the server chart's render refuses any
+#    other value too), and with reuse in values-global.yaml it refuses timeSlicing.enabled,
+#    which the cluster would then never apply (the two cases that set gpuOperators
+#    themselves leave it out).
 #
 # Every schema is downloaded from a pinned commit and checked against its sha256.
 # Needs python3 with PyYAML and jsonschema (PYTHON=... picks the interpreter), and
@@ -164,11 +170,16 @@ glob = load_values("values-global.yaml")
 variant = glob["main"]["variant"]
 variant_file = f"variants/{variant}/values-{variant}.yaml"
 used_overrides = set()
+# The other global.gpuOperators value than values-global.yaml's, so that both are checked and the install file
+# is used in some case either way.
+other_operators = "install" if (glob.get("global") or {}).get("gpuOperators") == "reuse" else "reuse"
 cases = [
     ("AWS", {}),
     ("AWS", {"gpuMachineSet": "none"}),
     ("GCP", {}),
     ("AWS", {"scaleOut": {"mode": "keda"}}),
+    ("AWS", {"gpuOperators": other_operators}),
+    ("AWS", {"gpuOperators": other_operators, "scaleOut": {"mode": "keda"}}),
 ]
 
 
@@ -207,6 +218,16 @@ for platform, extra_global in cases:
     failures.extend(f"{settings_label}: {problem}" for problem in problems)
     if not problems:
         print(f"ok   {settings_label}")
+    gpu_label = "GPU operator settings" + label.removeprefix("clustergroup values")
+    gpu_values = merge(load_values("charts/all/nvidia-gpu-config/values.yaml"), merged)
+    if "gpuOperators" in extra_global:
+        # A case that sets global.gpuOperators itself checks only that value: the GPU chart's time-slicing goes with
+        # the setting in values-global.yaml, and with install it is the way to fit two server pods on one GPU.
+        gpu_values = merge(gpu_values, {"timeSlicing": {"enabled": False}})
+    problems = pattern_settings.check_gpu_config(gpu_values)
+    failures.extend(f"{gpu_label}: {problem}" for problem in problems)
+    if not problems:
+        print(f"ok   {gpu_label}")
 
 for root, _dirs, names in os.walk(os.path.join(REPO, "overrides")):
     for name in names:

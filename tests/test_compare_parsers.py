@@ -1806,6 +1806,9 @@ def test_the_plan_check_reads_the_gpu_nodes_once_and_names_what_they_offer():
             "nvidia.com/gpu allocatable") in text and "cpu-1" not in text
     assert "time-slicing (not MPS) with 2 shares (timeSlicing.enabled: true, replicas: 2, in " in text
     assert "charts/all/nvidia-gpu-config/values.yaml" in text
+    # With global.gpuOperators reuse the pattern's chart does nothing: the hint names the cluster's own ClusterPolicy.
+    assert ("with global.gpuOperators reuse, in the cluster's own ClusterPolicy's devicePlugin.config, with "
+            "renameByDefault: false") in text
     assert cluster.calls == [("GET", "/api/v1/nodes")]
     with pytest.raises(plans.PlanError, match="sharing strategy mps, 2 nvidia.com/gpu allocatable.*not MPS"):
         FakeCluster(labels={kube.GPU_SHARING_LABEL: "mps"}).backend().check_plan(shared)
@@ -1830,6 +1833,21 @@ def test_the_plan_check_reads_the_gpu_nodes_once_and_names_what_they_offer():
                 ).backend().check_plan(_kube_scale_plan(shared=False))
     with pytest.raises(plans.PlanError, match="compare.side.gpuResourceName is nvidia.com/mig-1g.10gb"):
         FakeCluster().backend(RHVP_COMPARE_GPU_RESOURCE="nvidia.com/mig-1g.10gb").check_plan(shared)
+
+
+@pytest.mark.parametrize("shared", [True, False])
+def test_the_plan_check_names_gpu_feature_discovery_when_no_node_has_its_labels(shared):
+    # A reused ClusterPolicy may leave GPU feature discovery off: the hint then names it, not time-slicing.
+    no_gfd = FakeCluster(labels={kube.GPU_COUNT_LABEL: None, kube.GPU_REPLICAS_LABEL: None,
+                                 kube.GPU_SHARING_LABEL: None})
+    with pytest.raises(plans.PlanError) as caught:
+        no_gfd.backend().check_plan(_kube_scale_plan(shared=shared))
+    text = str(caught.value)
+    assert "the amd64 GPU nodes offer no node with the label nvidia.com/gpu.count" in text
+    to_run = text.split("To run it, ")[1]
+    assert "NVIDIA's GPU feature discovery on" in to_run and "spec.gfd.enabled" in to_run
+    assert "with global.gpuOperators reuse the cluster's own ClusterPolicy decides" in to_run
+    assert "time-slic" not in to_run and "sharedGpu" not in to_run
 
 
 def test_the_plan_check_looks_at_nothing_in_mode_levels_or_without_a_gpu():

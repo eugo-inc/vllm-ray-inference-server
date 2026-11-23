@@ -408,7 +408,8 @@ def test_gpu_time_slicing_is_opt_in(render):
 
 @pytest.fixture(scope="module")
 def cg(render) -> dict[str, list[dict]]:
-    return {case: docs(render / f"clustergroup/{case}.yaml") for case in ("default", "none", "gcp", "keda")}
+    return {case: docs(render / f"clustergroup/{case}.yaml")
+            for case in ("default", "none", "gcp", "keda", "reuse", "reuse-keda")}
 
 
 def imperative_jobs(items: list[dict]) -> list[str]:
@@ -450,21 +451,21 @@ def test_image_triggered_apps_ignore_image_drift(cg):
 
 
 def test_shared_value_files_switch(cg, render):
-    assert (render / "clustergroup/default.valuefiles").read_text().split() == [
-        "values-global.yaml", "variants/prod/values-prod.yaml", "overrides/values-gpu-machineset-create-AWS.yaml"]
-    for case in ("none", "gcp"):
-        assert "overrides/" not in (render / f"clustergroup/{case}.valuefiles").read_text()
-    assert (render / "clustergroup/keda.valuefiles").read_text().split() == [
-        "values-global.yaml", "variants/prod/values-prod.yaml", "overrides/values-gpu-machineset-create-AWS.yaml",
-        "overrides/values-scaleout-keda.yaml"]
+    base, install = ["values-global.yaml", "variants/prod/values-prod.yaml"], "overrides/values-gpu-operators-install.yaml"
+    machine, keda = "overrides/values-gpu-machineset-create-AWS.yaml", "overrides/values-scaleout-keda.yaml"
+    want = {"default": [machine, install], "none": [install], "gcp": [install], "keda": [machine, keda, install],
+            "reuse": [machine], "reuse-keda": [machine, keda]}
+    for case, files in want.items():
+        assert (render / f"clustergroup/{case}.valuefiles").read_text().split() == base + files, case
     prod = yaml.safe_load((REPO / "variants/prod/values-prod.yaml").read_text())
     assert prod["clusterGroup"]["sharedValueFiles"] == [
         "/overrides/values-gpu-machineset-{{ $.Values.global.gpuMachineSet }}-{{ $.Values.global.clusterPlatform }}.yaml",
-        "/overrides/values-scaleout-{{ $.Values.global.scaleOut.mode }}.yaml"]
+        "/overrides/values-scaleout-{{ $.Values.global.scaleOut.mode }}.yaml",
+        "/overrides/values-gpu-operators-{{ $.Values.global.gpuOperators }}.yaml"]
     assert GLOBAL["global"]["gpuMachineSet"] == "create"
-    # Only these two exist: global.scaleOut.mode none adds no file.
+    # Only these three exist: global.scaleOut.mode none and global.gpuOperators reuse add no file.
     assert sorted(p.name for p in (REPO / "overrides").iterdir()) == [
-        "values-gpu-machineset-create-AWS.yaml", "values-scaleout-keda.yaml"]
+        "values-gpu-machineset-create-AWS.yaml", "values-gpu-operators-install.yaml", "values-scaleout-keda.yaml"]
 
 
 def test_imperative_jobs(cg):
@@ -505,6 +506,99 @@ def test_operators(cg):
     pattern = GLOBAL["global"]["pattern"]
     assert pattern == "vllm-ray-inference-server"
     assert not any(ns == pattern or ns.startswith(f"{pattern}-") for ns in namespaces), sorted(namespaces)
+
+
+# ---- the cluster's own GPU operators (global.gpuOperators reuse) --------------------------------
+
+#: What global.gpuOperators install adds to the app of apps, and reuse leaves out: (kind, namespace, name).
+GPU_OPERATOR_OBJECTS = {
+    ("Namespace", "", "openshift-nfd"), ("Namespace", "", "nvidia-gpu-operator"),
+    ("OperatorGroup", "openshift-nfd", "openshift-nfd-operator-group"),
+    ("OperatorGroup", "nvidia-gpu-operator", "nvidia-gpu-operator-operator-group"),
+    ("Subscription", "openshift-nfd", "nfd"), ("Subscription", "nvidia-gpu-operator", "gpu-operator-certified"),
+    ("Application", "vp-gitops", "nfd-config"), ("Application", "vp-gitops", "nvidia-gpu-config")}
+#: The operators' override file in an Application's valueFiles; Argo CD skips one that does not exist (reuse).
+OPERATORS_FILE = re.compile(r"(\$patternref)?/overrides/values-gpu-operators-[^/]*\.yaml")
+
+
+def by_key(items: list[dict]) -> dict[tuple, dict]:
+    return {(d["kind"], d["metadata"].get("namespace", ""), d["metadata"]["name"]): d for d in items}
+
+
+def without_operators_file(d: dict) -> dict:
+    """An app-of-apps object without the operators' override file in its Applications' valueFiles (install names
+    values-gpu-operators-install.yaml, reuse a file that does not exist) and, for the values ConfigMap the chart
+    dumps, without the values: the two places where the install and reuse renders are allowed to differ."""
+    d = json.loads(json.dumps(d))
+    sources = (d["spec"].get("sources") or [d["spec"].get("source")]) if d["kind"] == "Application" else []
+    for src in sources:
+        helm = (src or {}).get("helm") or {}
+        if "valueFiles" in helm:
+            helm["valueFiles"] = [f for f in helm["valueFiles"] if not OPERATORS_FILE.fullmatch(f)]
+    if d["kind"] == "ConfigMap" and "values.yaml" in (d.get("data") or {}):
+        d["data"].pop("values.yaml")
+    return d
+
+
+def test_gpu_operators_install_is_the_default(cg):
+    assert GLOBAL["global"]["gpuOperators"] == "install"
+    # Every platform and machine setting installs both operators while gpuOperators is install.
+    for case in ("default", "none", "gcp", "keda"):
+        assert GPU_OPERATOR_OBJECTS <= set(by_key(cg[case])), case
+    install = yaml.safe_load((REPO / "overrides/values-gpu-operators-install.yaml").read_text())
+    # Only maps, which merge: a list here would replace the variant's.
+    assert set(install) == {"clusterGroup"}
+    assert set(install["clusterGroup"]) == {"namespaces", "subscriptions", "applications"}
+    assert all(isinstance(v, dict) for v in install["clusterGroup"].values())
+    prod = yaml.safe_load((REPO / "variants/prod/values-prod.yaml").read_text())["clusterGroup"]
+    assert not {"openshift-nfd", "nvidia-gpu-operator"} & set(prod["namespaces"])
+    assert not {"nfd", "nvidia"} & set(prod["subscriptions"])
+    assert not {"nfd-config", "nvidia-gpu-config"} & set(prod["applications"])
+
+
+@pytest.mark.parametrize("install, reuse", [("default", "reuse"), ("keda", "reuse-keda")])
+def test_reuse_creates_nothing_of_the_gpu_operators(cg, install, reuse):
+    # No Namespace (Argo CD would adopt the cluster's own, and an uninstall could delete it), OperatorGroup,
+    # Subscription or app of the two operators; everything else as with install.
+    a, b = by_key(cg[install]), by_key(cg[reuse])
+    assert set(a) - set(b) == GPU_OPERATOR_OBJECTS
+    assert set(b) <= set(a)
+    for key in b:
+        assert without_operators_file(a[key]) == without_operators_file(b[key]), key
+    assert not [d for d in cg[reuse] if d["kind"] in ("NodeFeatureDiscovery", "ClusterPolicy")]
+    text = json.dumps(cg[reuse])
+    for name in ("values-gpu-operators-install", "openshift-nfd", "nvidia-gpu-operator", "nfd-instance",
+                 "nvidia-gpu-cluster-policy"):
+        assert name not in text, name
+    # The file reuse names does not exist, so every Application gets no values from it.
+    assert not (REPO / "overrides/values-gpu-operators-reuse.yaml").exists()
+    if reuse == "reuse-keda":
+        one(cg[reuse], "Subscription", "openshift-custom-metrics-autoscaler-operator")
+
+
+def test_reuse_changes_no_local_chart(render):
+    # global.gpuOperators decides only what the app of apps creates; every chart the cluster still renders with
+    # reuse renders as with install (the notebook's cookie secret is random on every render). The cluster has no
+    # app for nfd-config and nvidia-gpu-config then, and render-charts.sh does not render them for reuse.
+    def text(path):
+        return re.sub(r'session_secret: ".*"', "session_secret: X", path.read_text())
+
+    operators = {"nfd-config", "nvidia-gpu-config"}
+    charts = {chart.name for chart in (REPO / "charts/all").iterdir()}
+    assert operators < charts
+    for name in sorted(charts - operators):
+        assert text(render / f"charts/{name}-reuse.yaml") == text(render / f"charts/{name}.yaml"), name
+    for name in operators:
+        assert not (render / f"charts/{name}-reuse.yaml").exists(), name
+
+
+def test_gpu_operator_refusals(render):
+    for case, message in (
+        ("gpu-operators-unknown", "global.gpuOperators must be install or reuse; got Reuse"),
+        ("gpu-operators-missing", "global.gpuOperators must be install or reuse; got <nil>"),
+        ("reuse-timeslicing", "timeSlicing.enabled needs global.gpuOperators install"),
+    ):
+        assert message in (render / f"refused/{case}.txt").read_text(), case
 
 
 # ---- scale-out across pods (global.scaleOut.mode keda) -----------------------------------------
@@ -660,7 +754,9 @@ def test_keda_install(cg, keda):
                          "ray-serve-llm", "notebook", "keda-config"}
     assert apps["keda-config"]["spec"]["source"]["path"] == "charts/all/keda-config"
     assert apps["keda-config"]["spec"]["destination"]["namespace"] == "openshift-keda"
-    assert apps["keda-config"]["spec"]["source"]["helm"]["valueFiles"][-1] == "/overrides/values-scaleout-keda.yaml"
+    # The shared value files come last, in sharedValueFiles order.
+    assert apps["keda-config"]["spec"]["source"]["helm"]["valueFiles"][-2:] == [
+        "/overrides/values-scaleout-keda.yaml", "/overrides/values-gpu-operators-install.yaml"]
     controller = one(keda["keda-config"], "KedaController", "keda")  # the only name the operator acts on
     assert "namespace" not in controller["metadata"]  # lands in the app's namespace, openshift-keda
     assert controller["spec"]["watchNamespace"] == ""

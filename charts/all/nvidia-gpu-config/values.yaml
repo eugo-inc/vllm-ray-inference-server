@@ -23,6 +23,9 @@ global:
 # mode"); keep other GPU work off the GPU nodes for that whole run: it catches
 # only a pod that still holds the second share when the second replica starts.
 # Switching this on or off restarts the device plugin on every GPU node.
+# Only with global.gpuOperators install: with reuse the pattern has no ClusterPolicy,
+# and the render refuses this setting; set up time-slicing in the cluster's own
+# ClusterPolicy instead (README, "Reuse the cluster's GPU operators").
 timeSlicing:
   enabled: false
   # Shares per GPU, 2 or more.

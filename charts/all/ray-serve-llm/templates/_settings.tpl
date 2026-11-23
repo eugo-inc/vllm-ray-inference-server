@@ -27,6 +27,14 @@
 {{- if not (and (kindIs "string" $mode) (has $mode (list "none" "keda"))) -}}
 {{- fail (printf "global.scaleOut.mode must be none or keda; got %v" $mode) -}}
 {{- end -}}
+{{- /* global.gpuOperators picks the override file that installs the GPU operators
+       (variants/prod/values-prod.yaml, sharedValueFiles). Any other value, or none, names a
+       file that does not exist, so the install gets neither operator: refused here, in a chart
+       that always renders. No default in this chart's values.yaml, which would hide a missing key. */ -}}
+{{- $operators := .Values.global.gpuOperators -}}
+{{- if not (and (kindIs "string" $operators) (has $operators (list "install" "reuse"))) -}}
+{{- fail (printf "global.gpuOperators must be install or reuse; got %v (any other value, or none, installs neither Node Feature Discovery nor the NVIDIA GPU Operator)" $operators) -}}
+{{- end -}}
 {{- $srv := .Values.server -}}
 {{- if or (hasKey $srv "minReplicas") (hasKey $srv "maxReplicas") -}}
 {{- fail "server.minReplicas and server.maxReplicas moved to server.autoscaling.minReplicas and server.autoscaling.maxReplicas" -}}
