@@ -448,8 +448,8 @@ the current `serve_app.engine_flags` and the runner's later changes (`engine_res
 machine, GPU or model; on OpenShift, a run that ends partial or is stopped, the refusal of a second run, keda mode during
 a run, a side with `args` of its own, and the side pods' SCC (not recorded); the DCGM reader against an exporter other
 than the one on those clusters, and which of its label names (`exported_pod`, `exported_namespace`, `pod`, `Hostname`) a
-real exporter uses; the length of a run with the defaults beyond the one full-length run (other sides, other GPUs, or 16
-rounds, which are untimed); a launch whose GuideLLM timed out again in its second try (`LOAD_FAILED`), which none of the
+real exporter uses; the length of a run beyond the one full-length run (other sides, other GPUs, or 16
+rounds, all untimed); a launch whose GuideLLM timed out again in its second try (`LOAD_FAILED`), which none of the
 runs above had; an engine restart count above 0 with vLLM 0.29.0 or on Kubernetes (the unit tests' logs have vLLM
 0.33.0's line shapes and their backend is a fake); and the engine restart count inside the second replica of mode
 `scaleout` and for a Ray Serve LLM server that exits once Ray Serve gives up after replicas stopped at the check (the

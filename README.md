@@ -921,7 +921,7 @@ per second, over the whole level, is not timed per token.
     and the NVIDIA GPU Operator from OperatorHub. The pattern was installed from a branch with a new setting,
     `global.gpuOperators: reuse`, that reuses those two Operators instead of installing its own. That setting is now on
     `main` ([Reuse the cluster's GPU operators](#reuse-the-clusters-gpu-operators)). Mode `levels` with the comparison's
-    default settings: side A upstream `vllm/vllm-openai` v0.33.0, side B this pattern's own server from the cluster's
+    default settings: side A upstream `vllm/vllm-openai` v0.33.0 (preset `vllm-openai`), side B this pattern's own server from the cluster's
     internal registry (preset `ray-serve-llm`, vLLM 0.29.0), one warm-up launch per side, then 8 rounds with twins, 60 s
     at each of 1, 8 and 32 concurrent streams. All 34 launches finished, in 3 hours 46 minutes, with DCGM energy
     figures. No engine was started again and no load timed out. All 4 primary cases got a verdict, each in upstream's
